@@ -40,7 +40,7 @@ DECLARE
   ranked jsonb;
   own_rank jsonb;
   total integer;
-  source_sha text;
+  snapshot_sha text;
   pool_name text;
   pair_number integer;
   pool_size integer;
@@ -120,17 +120,17 @@ BEGIN
   receipt_key := extensions.hmac(convert_to('join-check/receipt/v1', 'UTF8'), decode(review_key, 'hex'), 'sha256');
 
   IF action = 'card' THEN
-    SELECT c.sha INTO source_sha FROM odd_scoring.catalog_columns AS c
+    SELECT c.sha INTO snapshot_sha FROM odd_scoring.catalog_columns AS c
     WHERE c.id = 0 ORDER BY c.analyzed_at DESC, c.sha DESC LIMIT 1;
     pool_name := CASE WHEN random() < 0.75 THEN 'detected' ELSE 'random' END;
     FOR attempt IN 1..2 LOOP
       SELECT max(p.ordinal) + 1 INTO pool_size FROM odd_scoring.catalog_pairs AS p
-      WHERE p.sha = source_sha AND p.pool = pool_name;
+      WHERE p.sha = snapshot_sha AND p.pool = pool_name;
       FOR draw IN 1..12 LOOP
         pair_number := floor(random() * pool_size);
         EXIT WHEN NOT EXISTS (SELECT 1 FROM odd_scoring.review_points
           WHERE player = player_id AND review_points.receipt =
-            odd_scoring.review_receipt(player_id, source_sha, pool_name, pair_number, receipt_key));
+            odd_scoring.review_receipt(player_id, snapshot_sha, pool_name, pair_number, receipt_key));
         pair_number := NULL;
       END LOOP;
       IF pair_number IS NULL AND pool_size > 0 THEN
@@ -139,7 +139,7 @@ BEGIN
         CROSS JOIN LATERAL (SELECT (start_ordinal + offset_no) % pool_size AS n) AS candidate
         WHERE NOT EXISTS (SELECT 1 FROM odd_scoring.review_points
           WHERE player = player_id AND review_points.receipt =
-            odd_scoring.review_receipt(player_id, source_sha, pool_name, n, receipt_key))
+            odd_scoring.review_receipt(player_id, snapshot_sha, pool_name, n, receipt_key))
         LIMIT 1;
       END IF;
       EXIT WHEN pair_number IS NOT NULL;
@@ -147,12 +147,12 @@ BEGIN
     END LOOP;
     IF pair_number IS NULL THEN RETURN 'null'::jsonb; END IF;
     SELECT * INTO STRICT pair FROM odd_scoring.catalog_pairs AS p
-    WHERE p.sha = source_sha AND p.pool = pool_name AND p.ordinal = pair_number;
+    WHERE p.sha = snapshot_sha AND p.pool = pool_name AND p.ordinal = pair_number;
     SELECT jsonb_agg(c.details - 'resource_id' - 'package' - 'column_id' ORDER BY c.id)
-    INTO columns FROM odd_scoring.catalog_columns AS c WHERE c.sha = source_sha AND c.id IN (pair.a, pair.b);
+    INTO columns FROM odd_scoring.catalog_columns AS c WHERE c.sha = snapshot_sha AND c.id IN (pair.a, pair.b);
     IF random() < 0.5 THEN columns := jsonb_build_array(columns->1, columns->0); END IF;
     RETURN jsonb_build_object('columns', columns, 'id', replace(encode(extensions.pgp_sym_encrypt(
-      jsonb_build_object('player', player_id, 'sha', source_sha, 'pool', pool_name, 'ordinal', pair_number)::text,
+      jsonb_build_object('player', player_id, 'sha', snapshot_sha, 'pool', pool_name, 'ordinal', pair_number)::text,
       review_key, 'cipher-algo=aes256, s2k-mode=1'), 'base64'), chr(10), ''));
   END IF;
 
@@ -170,17 +170,17 @@ BEGIN
     IF (card->>'player')::integer IS DISTINCT FROM player_id THEN
       RAISE SQLSTATE 'PT404' USING MESSAGE = 'This card is unavailable. Reload to get a new card.';
     END IF;
-    source_sha := card->>'sha';
+    snapshot_sha := card->>'sha';
     pool_name := card->>'pool';
     pair_number := (card->>'ordinal')::integer;
     predicted := pool_name = 'detected';
     voted_yes := (payload->>'answer')::boolean;
-    receipt := odd_scoring.review_receipt(player_id, source_sha, pool_name, pair_number, receipt_key);
+    receipt := odd_scoring.review_receipt(player_id, snapshot_sha, pool_name, pair_number, receipt_key);
     INSERT INTO odd_scoring.review_points VALUES (player_id, receipt, current_ms) ON CONFLICT DO NOTHING;
     saved := FOUND;
     IF saved AND voted_yes <> predicted THEN
       INSERT INTO odd_scoring.disagreements
-      SELECT player_id, receipt, source_sha, l.analyzed_at, pool_name, p.score,
+      SELECT player_id, receipt, snapshot_sha, l.analyzed_at, pool_name, p.score,
         jsonb_build_object('id',l.id,'dataset',l.details->'package','title',l.details->'dataset',
           'file',l.details->'file','resource',l.details->'resource','resource_id',l.details->'resource_id','name',l.details->'name'),
         jsonb_build_object('id',r.id,'dataset',r.details->'package','title',r.details->'dataset',
@@ -189,12 +189,12 @@ BEGIN
       FROM odd_scoring.catalog_pairs AS p
       JOIN odd_scoring.catalog_columns AS l ON l.sha = p.sha AND l.id = p.a
       JOIN odd_scoring.catalog_columns AS r ON r.sha = p.sha AND r.id = p.b
-      WHERE p.sha = source_sha AND p.pool = pool_name AND p.ordinal = pair_number;
+      WHERE p.sha = snapshot_sha AND p.pool = pool_name AND p.ordinal = pair_number;
       IF NOT FOUND THEN RAISE SQLSTATE 'PT404' USING MESSAGE = 'This pair is no longer available.'; END IF;
     ELSIF NOT saved THEN
       SELECT d.answer INTO prior FROM odd_scoring.disagreements AS d
       WHERE d.player = player_id AND d.receipt = odd_scoring.review_receipt(
-        player_id, source_sha, pool_name, pair_number, receipt_key);
+        player_id, snapshot_sha, pool_name, pair_number, receipt_key);
       voted_yes := coalesce(prior = 1, predicted);
     END IF;
     SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;

@@ -14,6 +14,7 @@ jobs:
     if: vars.ODD_SCORING_SUPABASE_URL != '' && vars.ODD_SCORING_SUPABASE_KEY != ''
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
