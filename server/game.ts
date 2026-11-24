@@ -107,6 +107,7 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       const receipt = tokens.receipt(player.id, pair);
       const predicted = pair.pool === 'detected';
       return db.transaction(async query => {
+        if (db.postgres) await query.all('SELECT id FROM players WHERE id = ? FOR UPDATE', player.id);
         const saved = await query.run(`
           INSERT INTO review_points VALUES (?, ?, ?) ON CONFLICT (player, receipt) DO NOTHING
         `, player.id, receipt, now());
@@ -121,7 +122,17 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
         }
         const prior = saved ? undefined : await first<{ answer: number }>(query,
           'SELECT answer FROM disagreements WHERE player = ? AND receipt = ?', player.id, receipt);
-        return { points: await points(player, query), answer: saved ? answer : prior ? prior.answer === 1 : predicted };
+        const total = await points(player, query);
+        let promotion: number | null = null;
+        if (saved) {
+          const standing = await first<{ rank: number; tied: number }>(query, `
+            SELECT CAST(1 + COUNT(*) FILTER (WHERE points > ?) AS INTEGER) AS rank,
+              CAST(COUNT(*) FILTER (WHERE points = ?) AS INTEGER) AS tied
+            FROM (SELECT COUNT(*) AS points FROM review_points WHERE player <> ? GROUP BY player) AS others
+          `, total, total, player.id);
+          if (standing && standing.rank <= 10 && (total === 1 || standing.tied > 0)) promotion = standing.rank;
+        }
+        return { points: total, answer: saved ? answer : prior ? prior.answer === 1 : predicted, promotion };
       });
     },
     async leaderboard(player?: Player) {

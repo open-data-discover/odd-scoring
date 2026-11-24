@@ -95,17 +95,28 @@ async function checkSampling() {
     for (const user of [first, second]) {
       const card = (await play.next(user))!;
       assert(card.columns.some(column => column.name === 'B'));
-      assert.equal((await play.answer(user, card.id, true))?.points, 1);
+      assert.deepEqual(await play.answer(user, card.id, true), { points: 1, answer: true, promotion: 1 });
     }
     now = Date.parse('2026-11-01T06:30:00Z');
     assert.equal((await play.leaderboard(first)).asOf, new Date(now).toISOString());
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 1]);
     const fallback = (await play.next(first))!;
     assert(fallback.columns.some(column => column.name === 'C'));
-    assert.equal((await play.answer(first, fallback.id, false))?.points, 2);
+    assert.deepEqual(await play.answer(first, fallback.id, false), { points: 2, answer: false, promotion: null });
     assert.equal(await play.next(first), null);
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 2]);
     assert.equal((await play.leaderboard(first)).you?.points, 2);
+    const movingUp = (await play.next(second))!;
+    assert.deepEqual(await play.answer(second, movingUp.id, false), { points: 2, answer: false, promotion: 1 });
+    for (let i = 0; i < 8; i++) {
+      const { player } = (await play.select('Ahead-' + i, false))!;
+      await store.run('INSERT INTO review_points VALUES (?, ?, ?), (?, ?, ?)',
+        player.id, 'fixture-one', now, player.id, 'fixture-two', now);
+    }
+    const outside = (await play.select('Outside', false))!.player;
+    const outsideCard = (await play.next(outside))!;
+    assert.equal((await play.answer(outside, outsideCard.id, true))?.promotion, null);
+    assert.equal((await play.leaderboard(outside)).you?.rank, 11);
   } finally {
     db.close();
     catalog.close();
@@ -165,7 +176,11 @@ try {
     request('answer', cookie, save),
     request('answer', secondCookie, { ...save, cardId: samePair }),
   ]);
-  for (const attempt of attempts) assert.deepEqual(await attempt.json(), { answer: save.answer, points: 1 });
+  const repeated = await Promise.all(attempts.map(attempt => attempt.json()));
+  assert.equal(repeated.filter(result => result.promotion === 1).length, 1);
+  for (const result of repeated) {
+    assert.deepEqual({ ...result, promotion: null }, { answer: save.answer, points: 1, promotion: null });
+  }
   const next = await (await request('card', secondCookie)).json();
   assert.notEqual(next.id, card.id);
   const disagreement = { cardId: next.id, answer: !prediction(next.id) };

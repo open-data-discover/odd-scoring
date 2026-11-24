@@ -70,6 +70,9 @@ DECLARE
   voted_yes boolean;
   predicted boolean;
   prior smallint;
+  current_rank integer;
+  tied_players integer;
+  promotion integer;
 BEGIN
   IF session_token ~ '^[0-9a-f]{64}$' THEN
     SELECT p.id, p.name INTO player_id, player_name
@@ -192,6 +195,7 @@ BEGIN
     predicted := pool_name = 'detected';
     voted_yes := (payload->>'answer')::boolean;
     receipt := odd_scoring.review_receipt(player_id, snapshot_sha, pool_name, pair_number, receipt_key);
+    PERFORM 1 FROM odd_scoring.players AS p WHERE p.id = player_id FOR UPDATE;
     INSERT INTO odd_scoring.review_points VALUES (player_id, receipt, current_ms) ON CONFLICT DO NOTHING;
     saved := FOUND;
     IF saved AND voted_yes <> predicted THEN
@@ -214,7 +218,16 @@ BEGIN
       voted_yes := coalesce(prior = 1, predicted);
     END IF;
     SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;
-    RETURN jsonb_build_object('answer', voted_yes, 'points', total);
+    IF saved THEN
+      SELECT 1 + count(*) FILTER (WHERE points > total), count(*) FILTER (WHERE points = total)
+      INTO current_rank, tied_players
+      FROM (SELECT count(*) AS points FROM odd_scoring.review_points
+        WHERE player <> player_id GROUP BY player) AS others;
+      IF current_rank <= 10 AND (total = 1 OR tied_players > 0) THEN
+        promotion := current_rank;
+      END IF;
+    END IF;
+    RETURN jsonb_build_object('answer', voted_yes, 'points', total, 'promotion', promotion);
   END IF;
 
   RAISE SQLSTATE 'PT404' USING MESSAGE = 'This action is unavailable.';

@@ -82,11 +82,12 @@ function Modal({ title, close, children }: { title: string; close: () => void; c
   </dialog>;
 }
 
-function RankPanel({ close }: { close: () => void }) {
+function useLeaderboard(enabled: boolean, playerName?: string) {
   const [board, setBoard] = useState<Leaderboard>();
   const [error, setError] = useState('');
   const refresh = useRef<() => void>(() => {});
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     let connected = false;
     let loading = false;
@@ -130,9 +131,18 @@ function RankPanel({ close }: { close: () => void }) {
       window.clearInterval(timer);
       if (channel) void realtime?.removeChannel(channel);
     };
-  }, []);
+  }, [enabled, playerName]);
+  return { board, error, refresh: () => refresh.current() };
+}
+
+function RankPanel({ close, board, error, refresh }: {
+  close: () => void;
+  board: Leaderboard | undefined;
+  error: string;
+  refresh: () => void;
+}) {
   return <Modal title="Leaderboard" close={close}>
-    {error && <p role="alert">{error} <button onClick={() => refresh.current()}>Retry</button></p>}
+    {error && <p role="alert">{error} <button onClick={refresh}>Retry</button></p>}
     {!board && !error && <p role="status">Loading rankings…</p>}
     {board && <>
       {board.you && <div className="your-rank">
@@ -199,8 +209,19 @@ function App() {
   const [notice, setNotice] = useState('');
   const [burst, setBurst] = useState<{ id: number; x: number; y: number }>();
   const [awaitingNext, setAwaitingNext] = useState(false);
+  const [promotion, setPromotion] = useState<{ rank: number }>();
   const nameInput = useRef<HTMLInputElement>(null);
   const voteInProgress = useRef(false);
+  const standings = useLeaderboard(!!player || leaderboard, player?.name);
+  const yourStanding = standings.board?.you?.name === player?.name ? standings.board?.you : undefined;
+  const yourRank = yourStanding?.rank;
+  const answerCount = Math.max(player?.points ?? 0, yourStanding?.points ?? 0);
+
+  useEffect(() => {
+    if (!promotion) return;
+    const timer = window.setTimeout(() => setPromotion(undefined), 5000);
+    return () => window.clearTimeout(timer);
+  }, [promotion]);
 
   async function getCard() {
     setError('');
@@ -247,8 +268,11 @@ function App() {
     setNotice('');
     setBusy(true);
     try {
-      const result = await api<{ points: number; answer: boolean }>('answer', { cardId: card.id, answer });
+      const result = await api<{ points: number; answer: boolean; promotion: number | null }>(
+        'answer', { cardId: card.id, answer });
       setPlayer({ ...player, points: result.points });
+      if (result.promotion != null) setPromotion({ rank: result.promotion });
+      standings.refresh();
       setNotice(result.answer === answer ? 'Answer saved.' : 'This card was already answered.');
       setAwaitingNext(true);
       const rect = button.getBoundingClientRect();
@@ -297,7 +321,10 @@ function App() {
         </form>
       </section> : player ? <>
         <div className="player-line"><span>{player.name}</span>
-          <span><strong>{player.points.toLocaleString()}</strong> {player.points === 1 ? 'answer' : 'answers'}</span>
+          <div className="player-stats">
+            <span>{yourRank === undefined ? 'Rank —' : yourRank === null ? 'Unranked' : <>Rank <strong>#{yourRank}</strong></>}</span>
+            <span><strong>{answerCount.toLocaleString()}</strong> {answerCount === 1 ? 'answer' : 'answers'}</span>
+          </div>
         </div>
         <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
         <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
@@ -307,7 +334,7 @@ function App() {
             <Record column={card.columns[0]} side="A" />
             <Record column={card.columns[1]} side="B" />
           </div>
-          <div className="vote">
+          <div className="vote" role="group" aria-label="Vote on this pair">
             <button type="button" className="outline" aria-disabled={busy || awaitingNext}
               onClick={event => void vote(false, event.currentTarget)}>
               <span aria-hidden="true">×</span> No
@@ -321,9 +348,12 @@ function App() {
         {card === null && <p className="empty">You’ve answered every pair in this dataset snapshot.</p>}
         {card === undefined && !error && <p role="status">Loading your next pair…</p>}
         <span className="sr-only" role="status">{notice}</span>
+        <div role="status">{promotion && !error && <div className="rank-promotion">
+          You reached <strong>#{promotion.rank}</strong> on the leaderboard!
+        </div>}</div>
         {burst && <Confetti key={burst.id} x={burst.x} y={burst.y} />}
       </> : !error && <p role="status">Loading Join Check…</p>}
-      {error && !taken && <p className="error" role="alert">{error}{player === undefined
+      {error && !taken && <p className={player && card ? 'error vote-error' : 'error'} role="alert">{error}{player === undefined
         ? <> <button onClick={() => void restore()}>Retry</button></>
         : player && (card === undefined || awaitingNext) &&
           <> <button onClick={() => void getCard()}>Retry</button></>}</p>}
@@ -336,7 +366,7 @@ function App() {
         <button className="primary" disabled={busy} onClick={() => void select(true)}>Yes</button>
       </div>
     </Modal>}
-    {leaderboard && <RankPanel close={() => setLeaderboard(false)} />}
+    {leaderboard && <RankPanel {...standings} close={() => setLeaderboard(false)} />}
   </>;
 }
 
