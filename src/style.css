@@ -124,6 +124,7 @@ input {
 .review-question { max-width: none; font-size: clamp(1.35rem, 4vw, 1.8rem); line-height: 1.25; }
 .hint { max-width: 44rem; margin: .55rem 0 1.25rem; }
 .hint strong { color: var(--ink); }
+.score-hint { margin: -.85rem 0 1.25rem; color: var(--muted); font-size: .88rem; }
 .pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -201,6 +202,26 @@ main:has(.vote) { padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
 .vote button { min-width: min(36vw, 9rem); min-height: 3.1rem; }
 .vote button span { padding-right: .25rem; }
 .confetti { pointer-events: none; position: fixed; z-index: 2; }
+.points-popup {
+  position: fixed;
+  z-index: 3;
+  pointer-events: none;
+  transform: translate(-50%, -135%);
+  padding: .15rem .5rem;
+  border: 1px solid var(--bar);
+  border-radius: .4rem;
+  background: var(--paper);
+  color: var(--bar);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  animation: points-rise 1.7s ease-out both;
+}
+@keyframes points-rise {
+  0%, 15% { opacity: 1; transform: translate(-50%, -105%); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -230%); }
+}
+main:has(.points-popup) .rank-promotion { bottom: calc(8rem + env(safe-area-inset-bottom, 0px)); }
 .confetti i {
   position: absolute;
   width: 6px;
@@ -214,7 +235,10 @@ main:has(.vote) { padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
   65% { opacity: 1; }
   to { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--spin)); }
 }
-@media (prefers-reduced-motion: reduce) { .confetti { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .confetti { display: none; }
+  .points-popup { animation: none; }
+}
 
 dialog {
   width: min(calc(100% - 2rem), 34rem);

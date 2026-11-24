@@ -5,7 +5,8 @@ import { RealtimeClient } from '@supabase/realtime-js';
 import DotGrid from './DotGrid';
 import './style.css';
 
-type Player = { name: string; points: number };
+type Player = { name: string; points: number; answers: number };
+type LinkSide = 'A' | 'B';
 type Column = {
   name: string; resource: string; dataset: string; url: string;
   description: string | null; examples: string[];
@@ -15,7 +16,7 @@ type Rank = { name: string; rank: number; points: number };
 type Leaderboard = {
   asOf: string;
   top: Rank[];
-  you: (Omit<Rank, 'rank'> & { rank: number | null; livePoints: number }) | null;
+  you: (Omit<Rank, 'rank'> & { rank: number | null; answers: number }) | null;
 };
 
 class RequestError extends Error {
@@ -39,7 +40,7 @@ function rememberToken(token: string | null) {
   } catch { /* Keep the current session in memory. */ }
 }
 
-async function api<T>(route: string, body?: Record<string, unknown>): Promise<T> {
+async function api<T>(route: string, body?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const response = apiOrigin
     ? await fetch(apiOrigin + '/rest/v1/rpc/odd_scoring_play', {
       method: 'POST',
@@ -47,9 +48,10 @@ async function api<T>(route: string, body?: Record<string, unknown>): Promise<T>
       body: JSON.stringify({ action: route === 'session' && body ? 'select' : route,
         session_token: browserToken, payload: body ?? {} }),
       credentials: 'omit',
+      signal,
     })
     : await fetch('/api/' + route, body && {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
     });
   if (!response.ok) {
     const failure = await response.json().catch(() => ({}));
@@ -147,7 +149,8 @@ function RankPanel({ close, board, error, refresh }: {
     {board && <>
       {board.you && <div className="your-rank">
         <div><span>Your rank</span><strong>{board.you.rank === null ? 'Unranked' : '#' + board.you.rank}</strong></div>
-        <div><span>Total answers</span><strong>{board.you.points.toLocaleString()}</strong></div>
+        <div><span>Points</span><strong>{board.you.points.toLocaleString()}</strong></div>
+        <div><span>Total answers</span><strong>{board.you.answers.toLocaleString()}</strong></div>
       </div>}
       {board.top.length === 0 ? <p>No ranked players yet.</p> :
         <table>
@@ -160,14 +163,16 @@ function RankPanel({ close, board, error, refresh }: {
   </Modal>;
 }
 
-function Record({ column, side }: { column: Column; side: string }) {
+function Record({ column, side, visit }: { column: Column; side: LinkSide; visit: (side: LinkSide) => void }) {
   return <article className="record">
     <div className="record-label"><span aria-hidden="true">{side}</span> Column {side}</div>
     <h2>{column.name}</h2>
     <div className="record-details">
       <dl className="record-source">
         <dt>Dataset</dt>
-        <dd><a href={column.url} target="_blank" rel="noreferrer">{column.dataset}<span aria-hidden="true">&nbsp;↗</span>
+        <dd><a href={column.url} target="_blank" rel="noreferrer" onClick={() => visit(side)}
+          onAuxClick={event => { if (event.button === 1) visit(side); }}>
+          {column.dataset}<span aria-hidden="true">&nbsp;↗</span>
           <span className="sr-only"> (opens in a new tab)</span></a></dd>
         {column.resource && column.resource !== column.dataset && <>
           <dt>Resource</dt>
@@ -207,15 +212,17 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [burst, setBurst] = useState<{ id: number; x: number; y: number }>();
+  const [burst, setBurst] = useState<{ id: number; x: number; y: number; earned: number }>();
   const [awaitingNext, setAwaitingNext] = useState(false);
   const [promotion, setPromotion] = useState<{ rank: number }>();
   const nameInput = useRef<HTMLInputElement>(null);
   const voteInProgress = useRef(false);
+  const linkVisits = useRef(new Map<LinkSide, Promise<string | null>>());
   const standings = useLeaderboard(!!player || leaderboard, player?.name);
   const yourStanding = standings.board?.you?.name === player?.name ? standings.board?.you : undefined;
   const yourRank = yourStanding?.rank;
-  const answerCount = Math.max(player?.points ?? 0, yourStanding?.points ?? 0);
+  const answerCount = Math.max(player?.answers ?? 0, yourStanding?.answers ?? 0);
+  const pointCount = Math.max(player?.points ?? 0, yourStanding?.points ?? 0);
 
   useEffect(() => {
     if (!promotion) return;
@@ -223,10 +230,18 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [promotion]);
 
+  useEffect(() => {
+    if (!burst) return;
+    const timer = window.setTimeout(() => setBurst(undefined), 1700);
+    return () => window.clearTimeout(timer);
+  }, [burst]);
+
   async function getCard() {
     setError('');
     try {
-      setCard(await api<Card | null>('card'));
+      const next = await api<Card | null>('card');
+      linkVisits.current.clear();
+      setCard(next);
       setAwaitingNext(false);
     } catch (error) {
       setError(message(error));
@@ -261,23 +276,39 @@ function App() {
     }
   }
 
+  function visit(side: LinkSide) {
+    if (!card || voteInProgress.current || awaitingNext || linkVisits.current.has(side)) return;
+    const request = api<{ proof: string }>('link', { cardId: card.id, side }, AbortSignal.timeout(5000))
+      .then(result => result.proof)
+      .catch(() => {
+        if (linkVisits.current.get(side) === request) linkVisits.current.delete(side);
+        setNotice('Dataset link credit could not be recorded. Open the link again to retry.');
+        return null;
+      });
+    linkVisits.current.set(side, request);
+  }
+
   async function vote(answer: boolean, button: HTMLButtonElement) {
     if (!card || !player || voteInProgress.current || awaitingNext) return;
     voteInProgress.current = true;
     setError('');
     setNotice('');
+    setBurst(undefined);
     setBusy(true);
     try {
-      const result = await api<{ points: number; answer: boolean; promotion: number | null }>(
-        'answer', { cardId: card.id, answer });
-      setPlayer({ ...player, points: result.points });
+      const linkProofs = (await Promise.all(linkVisits.current.values())).filter(proof => proof !== null);
+      const result = await api<{ points: number; answers: number; promotion: number | null; earned: number | null }>(
+        'answer', { cardId: card.id, answer, linkProofs });
+      setPlayer({ ...player, points: result.points, answers: result.answers });
       if (result.promotion != null) setPromotion({ rank: result.promotion });
       standings.refresh();
-      setNotice(result.answer === answer ? 'Answer saved.' : 'This card was already answered.');
+      setNotice(result.earned != null ? `Answer saved. You earned ${result.earned} points.` : 'This card was already answered.');
       setAwaitingNext(true);
       const rect = button.getBoundingClientRect();
-      setBurst({ id: Date.now(), x: rect.left + rect.width / 2,
-        y: Math.max(24, Math.min(window.innerHeight - 10, rect.top + rect.height / 2)) });
+      if (result.earned != null) {
+        setBurst({ id: Date.now(), earned: result.earned, x: rect.left + rect.width / 2,
+          y: Math.max(24, Math.min(window.innerHeight - 10, rect.top + rect.height / 2)) });
+      }
       await getCard();
     } catch (error) {
       setError(message(error));
@@ -310,7 +341,7 @@ function App() {
     <main>
       {player === null ? <section className="intro" aria-labelledby="intro-title">
         <h1 id="intro-title">Should these columns join?</h1>
-        <p>Help audit Toronto’s Open Data joins. Review two columns at a time and earn a point for each answer.</p>
+        <p>Help audit Toronto’s Open Data joins. Review two columns at a time and earn up to 20 points per card.</p>
         <form onSubmit={submitName}>
           <label htmlFor="username">Username</label>
           <div className="name-row">
@@ -323,16 +354,18 @@ function App() {
         <div className="player-line"><span>{player.name}</span>
           <div className="player-stats">
             <span>{yourRank === undefined ? 'Rank —' : yourRank === null ? 'Unranked' : <>Rank <strong>#{yourRank}</strong></>}</span>
+            <span><strong>{pointCount.toLocaleString()}</strong> {pointCount === 1 ? 'point' : 'points'}</span>
             <span><strong>{answerCount.toLocaleString()}</strong> {answerCount === 1 ? 'answer' : 'answers'}</span>
           </div>
         </div>
         <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
         <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
           columns refer to the same kind of entity or attribute, or <strong>No</strong> if they mean different things.</p>
+        <p className="score-hint">Earn 1 point every 2 seconds for up to 30 seconds, plus 2.5 points per dataset link.</p>
         {card && <>
           <div className="pair" key={card.id}>
-            <Record column={card.columns[0]} side="A" />
-            <Record column={card.columns[1]} side="B" />
+            <Record column={card.columns[0]} side="A" visit={visit} />
+            <Record column={card.columns[1]} side="B" visit={visit} />
           </div>
           <div className="vote" role="group" aria-label="Vote on this pair">
             <button type="button" className="outline" aria-disabled={busy || awaitingNext}
@@ -351,7 +384,12 @@ function App() {
         <div role="status">{promotion && !error && <div className="rank-promotion">
           You reached <strong>#{promotion.rank}</strong> on the leaderboard!
         </div>}</div>
-        {burst && <Confetti key={burst.id} x={burst.x} y={burst.y} />}
+        {burst && <span key={burst.id} aria-hidden="true">
+          <Confetti x={burst.x} y={burst.y} />
+          <span className="points-popup" style={{ left: burst.x, top: burst.y }}>
+            +{burst.earned.toLocaleString()}
+          </span>
+        </span>}
       </> : !error && <p role="status">Loading Join Check…</p>}
       {error && !taken && <p className={player && card ? 'error vote-error' : 'error'} role="alert">{error}{player === undefined
         ? <> <button onClick={() => void restore()}>Retry</button></>

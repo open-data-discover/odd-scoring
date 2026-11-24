@@ -3,6 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import type { Store } from './store.ts';
 
 export type Pair = { sha: string; pool: 'detected' | 'random'; ordinal: number };
+export type LinkSide = 'A' | 'B';
+type ReviewCard = Pair & { issued?: number };
 
 export function reviewKey(sqlitePath?: string) {
   const configured = process.env.CARD_SIGNING_KEY;
@@ -24,18 +26,22 @@ export function reviewTokens(key: Buffer) {
   const derive = (purpose: string) => createHmac('sha256', key).update(purpose).digest();
   const encryptionKey = derive('join-check/card/v1');
   const receiptKey = derive('join-check/receipt/v1');
+  const linkKey = derive('join-check/link/v1');
   return {
     receipt(player: number, { sha, pool, ordinal }: Pair) {
       return createHmac('sha256', receiptKey).update(JSON.stringify([player, sha, pool, ordinal])).digest('hex');
     },
-    issue(player: number, { sha, pool, ordinal }: Pair) {
+    link(token: string, side: LinkSide) {
+      return createHmac('sha256', linkKey).update(JSON.stringify([token, side])).digest('hex');
+    },
+    issue(player: number, { sha, pool, ordinal }: Pair, issued = Date.now()) {
       const nonce = randomBytes(12);
       const cipher = createCipheriv('aes-256-gcm', encryptionKey, nonce);
       cipher.setAAD(Buffer.from(String(player)));
-      const encrypted = Buffer.concat([cipher.update(JSON.stringify({ sha, pool, ordinal })), cipher.final()]);
+      const encrypted = Buffer.concat([cipher.update(JSON.stringify({ sha, pool, ordinal, issued })), cipher.final()]);
       return Buffer.concat([nonce, encrypted, cipher.getAuthTag()]).toString('base64url');
     },
-    read(player: number, token: string): Pair | undefined {
+    read(player: number, token: string): ReviewCard | undefined {
       if (!/^[A-Za-z0-9_-]{38,512}$/.test(token)) return undefined;
       try {
         const bytes = Buffer.from(token, 'base64url');
@@ -43,7 +49,7 @@ export function reviewTokens(key: Buffer) {
         decipher.setAAD(Buffer.from(String(player)));
         decipher.setAuthTag(bytes.subarray(-16));
         const plaintext = Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()]);
-        return JSON.parse(plaintext.toString('utf8')) as Pair;
+        return JSON.parse(plaintext.toString('utf8')) as ReviewCard;
       } catch {
         return undefined;
       }
@@ -56,6 +62,7 @@ export const reviewSchema = [
     player integer NOT NULL REFERENCES players(id),
     receipt text NOT NULL,
     answered_at bigint NOT NULL,
+    half_points integer NOT NULL DEFAULT 2 CHECK (half_points BETWEEN 0 AND 40),
     PRIMARY KEY (player, receipt)
   )`,
   `CREATE TABLE IF NOT EXISTS disagreements (
@@ -77,5 +84,10 @@ export async function prepareReviews(db: Store) {
   await db.transaction(async query => {
     if (db.postgres) await query.all("SELECT pg_advisory_xact_lock(hashtext('odd-scoring-migration'))");
     for (const sql of reviewSchema) await query.run(sql);
+    const columns = db.postgres ? [] : await query.all<{ name: string }>('PRAGMA table_info(review_points)');
+    if (db.postgres || !columns.some(column => column.name === 'half_points')) {
+      await query.run('ALTER TABLE review_points ADD COLUMN ' + (db.postgres ? 'IF NOT EXISTS ' : '')
+        + 'half_points integer NOT NULL DEFAULT 2 CHECK (half_points BETWEEN 0 AND 40)');
+    }
   });
 }

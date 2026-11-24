@@ -76,5 +76,6 @@ disagreement. All detected candidates count as predicted joins, including those
 below the Open Data Discover display cutoff.
 
 Showing a card does not create a database row. A completed vote earns one point
-in `review_points`, which stores the reviewer, completion time, and an opaque
-deduplication receipt. Only `disagreements` stores the pair and explicit vote.
+per two seconds, up to 15 points, and 2.5 points for each dataset link opened on
+that card. `review_points` stores the earned score, reviewer, completion time,
+and an opaque deduplication receipt. Only `disagreements` stores the pair and vote.

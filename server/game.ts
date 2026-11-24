@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { first } from './store.ts';
 import type { Query, Store } from './store.ts';
 import { reviewTokens } from './reviews.ts';
-import type { Pair } from './reviews.ts';
+import type { LinkSide, Pair } from './reviews.ts';
 
 type Player = { id: number; name: string };
 type Pool = Pair['pool'];
@@ -26,7 +26,8 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
     SELECT players.id, players.name FROM sessions JOIN players ON players.id = sessions.player
     WHERE hash = ? AND expires_at > ?
   `;
-  const count = 'SELECT CAST(COUNT(*) AS INTEGER) AS points FROM review_points WHERE player = ?';
+  const count = `SELECT CAST(COUNT(*) AS INTEGER) AS answers,
+    COALESCE(SUM(half_points), 0) / 2.0 AS points FROM review_points WHERE player = ?`;
   const used = 'SELECT 1 FROM review_points WHERE player = ? AND receipt = ?';
   const cardColumns = `
     SELECT c.id, c.dataset, c.title, c.file, c.resource, c.resource_id, c.name, e.samples, p.score, i.analyzed_at
@@ -36,8 +37,9 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
     WHERE p.sha = ? AND p.pool = ? AND p.ordinal = ?
     ORDER BY c.id
   `;
-  async function points(player: Player, query: Query = db) {
-    return (await first<{ points: number }>(query, count, player.id))!.points;
+  async function totals(player: Player, query: Query = db) {
+    const row = (await first<{ points: number | string; answers: number }>(query, count, player.id))!;
+    return { points: Number(row.points), answers: row.answers };
   }
 
   async function selectOrdinal(player: number, pool: Pool) {
@@ -79,7 +81,7 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
         return { player, token };
       });
     },
-    points,
+    totals,
     async next(player: Player) {
       let pool: Pool = draw(4) < 3 ? 'detected' : 'random';
       let ordinal = await selectOrdinal(player.id, pool);
@@ -99,18 +101,27 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       }));
       // Present either column first independently of Parquet order.
       if (randomInt(2)) columns.reverse();
-      return { id: tokens.issue(player.id, { sha, pool, ordinal }), columns };
+      return { id: tokens.issue(player.id, { sha, pool, ordinal }, now()), columns };
     },
-    answer(player: Player, id: string, answer: boolean) {
+    recordLink(player: Player, id: string, side: LinkSide) {
+      if (!tokens.read(player.id, id)) return undefined;
+      return { proof: tokens.link(id, side) };
+    },
+    answer(player: Player, id: string, answer: boolean, proofs: unknown[] = []) {
       const pair = tokens.read(player.id, id);
       if (!pair) return undefined;
       const receipt = tokens.receipt(player.id, pair);
       const predicted = pair.pool === 'detected';
+      const answeredAt = now();
+      const timePoints = Math.min(15, Math.max(0, Math.floor((answeredAt - (pair.issued ?? answeredAt)) / 2000)));
+      const linkCount = (['A', 'B'] as const).filter(side => proofs.includes(tokens.link(id, side))).length;
+      const halfPoints = timePoints * 2 + linkCount * 5;
       return db.transaction(async query => {
         if (db.postgres) await query.all('SELECT id FROM players WHERE id = ? FOR UPDATE', player.id);
         const saved = await query.run(`
-          INSERT INTO review_points VALUES (?, ?, ?) ON CONFLICT (player, receipt) DO NOTHING
-        `, player.id, receipt, now());
+          INSERT INTO review_points (player, receipt, answered_at, half_points)
+          VALUES (?, ?, ?, ?) ON CONFLICT (player, receipt) DO NOTHING
+        `, player.id, receipt, answeredAt, halfPoints);
         if (saved && answer !== predicted) {
           const columns = await catalog.all<Column>(cardColumns, pair.sha, pair.pool, pair.ordinal);
           if (columns.length !== 2) throw new Error('Review pair is no longer available');
@@ -122,41 +133,45 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
         }
         const prior = saved ? undefined : await first<{ answer: number }>(query,
           'SELECT answer FROM disagreements WHERE player = ? AND receipt = ?', player.id, receipt);
-        const total = await points(player, query);
+        const total = await totals(player, query);
         let promotion: number | null = null;
         if (saved) {
-          const standing = await first<{ rank: number; tied: number }>(query, `
+          const standing = await first<{ rank: number; previous: number }>(query, `
             SELECT CAST(1 + COUNT(*) FILTER (WHERE points > ?) AS INTEGER) AS rank,
-              CAST(COUNT(*) FILTER (WHERE points = ?) AS INTEGER) AS tied
-            FROM (SELECT COUNT(*) AS points FROM review_points WHERE player <> ? GROUP BY player) AS others
-          `, total, total, player.id);
-          if (standing && standing.rank <= 10 && (total === 1 || standing.tied > 0)) promotion = standing.rank;
+              CAST(1 + COUNT(*) FILTER (WHERE points > ?) AS INTEGER) AS previous
+            FROM (SELECT SUM(half_points) AS points FROM review_points WHERE player <> ? GROUP BY player) AS others
+          `, total.points * 2, total.points * 2 - halfPoints, player.id);
+          if (standing && standing.rank <= 10 && (total.answers === 1 || standing.previous > standing.rank)) {
+            promotion = standing.rank;
+          }
         }
-        return { points: total, answer: saved ? answer : prior ? prior.answer === 1 : predicted, promotion };
+        return { ...total, answer: saved ? answer : prior ? prior.answer === 1 : predicted,
+          promotion, earned: saved ? halfPoints / 2 : null };
       });
     },
     async leaderboard(player?: Player) {
-      const entries = await db.all<Rank & { player: number; position: number }>(`
+      const entries = await db.all<Omit<Rank, 'points'> & { points: number | string; answers: number;
+        player: number; position: number }>(`
         WITH totals AS (
-          SELECT player, CAST(COUNT(*) AS INTEGER) AS points
+          SELECT player, SUM(half_points) / 2.0 AS points, CAST(COUNT(*) AS INTEGER) AS answers
           FROM review_points GROUP BY player
         ), ranked AS (
-          SELECT name, player, points,
+          SELECT name, player, points, answers,
             CAST(RANK() OVER (ORDER BY points DESC) AS INTEGER) AS rank,
             CAST(ROW_NUMBER() OVER (ORDER BY points DESC, name_key) AS INTEGER) AS position
           FROM totals JOIN players ON players.id = player
         )
-        SELECT name, player, points, rank, position FROM ranked
+        SELECT name, player, points, answers, rank, position FROM ranked
         WHERE position <= 50 OR player = ? ORDER BY position
       `, player?.id ?? null);
       const top = entries.filter(entry => entry.position <= 50).map(({ name, rank, points }) =>
-        ({ name, rank, points }));
+        ({ name, rank, points: Number(points) }));
       const rank = entries.find(entry => entry.player === player?.id);
       return {
         asOf: new Date(now()).toISOString(),
         top,
-        you: player ? { name: player.name, rank: rank?.rank ?? null, points: rank?.points ?? 0,
-          livePoints: rank?.points ?? 0 } : null,
+        you: player ? { name: player.name, rank: rank?.rank ?? null, points: Number(rank?.points ?? 0),
+          livePoints: Number(rank?.points ?? 0), answers: rank?.answers ?? 0 } : null,
       };
     },
   };

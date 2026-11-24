@@ -1,3 +1,6 @@
+ALTER TABLE odd_scoring.review_points ADD COLUMN IF NOT EXISTS half_points
+  integer NOT NULL DEFAULT 2 CHECK (half_points BETWEEN 0 AND 40);
+
 CREATE TABLE IF NOT EXISTS odd_scoring.catalog_columns (
   sha text NOT NULL,
   id integer NOT NULL,
@@ -56,7 +59,8 @@ DECLARE
   current_ms bigint := floor(extract(epoch FROM statement_timestamp()) * 1000);
   ranked jsonb;
   own_rank jsonb;
-  total integer;
+  total bigint;
+  answer_count integer;
   snapshot_sha text;
   pool_name text;
   pair_number integer;
@@ -71,8 +75,12 @@ DECLARE
   predicted boolean;
   prior smallint;
   current_rank integer;
-  tied_players integer;
+  previous_rank integer;
   promotion integer;
+  link_side text;
+  proof text;
+  link_key bytea;
+  earned integer;
 BEGIN
   IF session_token ~ '^[0-9a-f]{64}$' THEN
     SELECT p.id, p.name INTO player_id, player_name
@@ -109,25 +117,27 @@ BEGIN
 
   IF action IN ('session', 'select') THEN
     IF player_id IS NULL THEN RETURN 'null'::jsonb; END IF;
-    SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;
-    RETURN jsonb_strip_nulls(jsonb_build_object('name', player_name, 'points', total, 'token', new_token));
+    SELECT coalesce(sum(half_points),0), count(*) INTO total, answer_count FROM odd_scoring.review_points WHERE player = player_id;
+    RETURN jsonb_strip_nulls(jsonb_build_object('name', player_name, 'points', total / 2.0,
+      'answers', answer_count, 'token', new_token));
   END IF;
   IF action = 'leaderboard' THEN
     WITH totals AS (
-      SELECT player, count(*) AS points FROM odd_scoring.review_points
+      SELECT player, sum(half_points) / 2.0 AS points, count(*) AS answers FROM odd_scoring.review_points
       GROUP BY player
     ), ranks AS (
-      SELECT p.id, p.name, t.points, rank() OVER (ORDER BY t.points DESC) AS rank,
+      SELECT p.id, p.name, t.points, t.answers, rank() OVER (ORDER BY t.points DESC) AS rank,
         row_number() OVER (ORDER BY t.points DESC, p.name_key) AS position
       FROM totals AS t JOIN odd_scoring.players AS p ON p.id = t.player
     )
     SELECT coalesce(jsonb_agg(jsonb_build_object('name', name, 'rank', rank, 'points', points)
       ORDER BY position) FILTER (WHERE position <= 50), '[]'::jsonb),
-      (jsonb_agg(jsonb_build_object('rank', rank, 'points', points)) FILTER (WHERE id = player_id))->0
+      (jsonb_agg(jsonb_build_object('rank', rank, 'points', points, 'answers', answers)) FILTER (WHERE id = player_id))->0
     INTO ranked, own_rank FROM ranks;
     RETURN jsonb_build_object('asOf', statement_timestamp(), 'top', ranked, 'you',
       CASE WHEN player_id IS NULL THEN NULL ELSE jsonb_build_object('name', player_name,
         'livePoints', coalesce(own_rank->'points','0'::jsonb),
+        'answers', coalesce(own_rank->'answers','0'::jsonb),
         'rank', own_rank->'rank', 'points', coalesce(own_rank->'points','0'::jsonb)) END);
   END IF;
 
@@ -171,15 +181,15 @@ BEGIN
     INTO columns FROM odd_scoring.catalog_columns AS c WHERE c.sha = snapshot_sha AND c.id IN (pair.a, pair.b);
     IF random() < 0.5 THEN columns := jsonb_build_array(columns->1, columns->0); END IF;
     RETURN jsonb_build_object('columns', columns, 'id', replace(encode(extensions.pgp_sym_encrypt(
-      jsonb_build_object('player', player_id, 'sha', snapshot_sha, 'pool', pool_name, 'ordinal', pair_number)::text,
+      jsonb_build_object('player', player_id, 'sha', snapshot_sha, 'pool', pool_name,
+        'ordinal', pair_number, 'issued', current_ms)::text,
       review_key, 'cipher-algo=aes256, s2k-mode=1'), 'base64'), chr(10), ''));
   END IF;
 
-  IF action = 'answer' THEN
-    IF jsonb_typeof(payload->'answer') IS DISTINCT FROM 'boolean'
-       OR jsonb_typeof(payload->'cardId') IS DISTINCT FROM 'string'
+  IF action IN ('link', 'answer') THEN
+    IF jsonb_typeof(payload->'cardId') IS DISTINCT FROM 'string'
        OR length(payload->>'cardId') > 512 THEN
-      RAISE SQLSTATE 'PT400' USING MESSAGE = 'Choose yes or no for the current card.';
+      RAISE SQLSTATE 'PT400' USING MESSAGE = 'A current card is required.';
     END IF;
     BEGIN
       card := extensions.pgp_sym_decrypt(decode(payload->>'cardId', 'base64'), review_key)::jsonb;
@@ -189,6 +199,25 @@ BEGIN
     IF (card->>'player')::integer IS DISTINCT FROM player_id THEN
       RAISE SQLSTATE 'PT404' USING MESSAGE = 'This card is unavailable. Reload to get a new card.';
     END IF;
+    link_key := extensions.hmac(convert_to('join-check/link/v1', 'UTF8'), decode(review_key, 'hex'), 'sha256');
+    IF action = 'link' THEN
+      link_side := payload->>'side';
+      IF link_side IS NULL OR link_side NOT IN ('A', 'B') THEN
+        RAISE SQLSTATE 'PT400' USING MESSAGE = 'Choose a dataset link from the current card.';
+      END IF;
+      proof := encode(extensions.hmac(convert_to(format('[%s,%s]', to_json(payload->>'cardId'),
+        to_json(link_side)), 'UTF8'), link_key, 'sha256'), 'hex');
+      RETURN jsonb_build_object('proof', proof);
+    END IF;
+    IF jsonb_typeof(payload->'answer') IS DISTINCT FROM 'boolean' THEN
+      RAISE SQLSTATE 'PT400' USING MESSAGE = 'Choose yes or no for the current card.';
+    END IF;
+    earned := least(15, greatest(0, (current_ms - coalesce((card->>'issued')::bigint, current_ms)) / 2000)) * 2;
+    FOREACH link_side IN ARRAY ARRAY['A', 'B'] LOOP
+      proof := encode(extensions.hmac(convert_to(format('[%s,%s]', to_json(payload->>'cardId'),
+        to_json(link_side)), 'UTF8'), link_key, 'sha256'), 'hex');
+      IF payload->'linkProofs' @> jsonb_build_array(proof) THEN earned := earned + 5; END IF;
+    END LOOP;
     snapshot_sha := card->>'sha';
     pool_name := card->>'pool';
     pair_number := (card->>'ordinal')::integer;
@@ -196,7 +225,8 @@ BEGIN
     voted_yes := (payload->>'answer')::boolean;
     receipt := odd_scoring.review_receipt(player_id, snapshot_sha, pool_name, pair_number, receipt_key);
     PERFORM 1 FROM odd_scoring.players AS p WHERE p.id = player_id FOR UPDATE;
-    INSERT INTO odd_scoring.review_points VALUES (player_id, receipt, current_ms) ON CONFLICT DO NOTHING;
+    INSERT INTO odd_scoring.review_points (player, receipt, answered_at, half_points)
+    VALUES (player_id, receipt, current_ms, earned) ON CONFLICT DO NOTHING;
     saved := FOUND;
     IF saved AND voted_yes <> predicted THEN
       INSERT INTO odd_scoring.disagreements
@@ -217,17 +247,18 @@ BEGIN
         player_id, snapshot_sha, pool_name, pair_number, receipt_key);
       voted_yes := coalesce(prior = 1, predicted);
     END IF;
-    SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;
+    SELECT coalesce(sum(half_points),0), count(*) INTO total, answer_count FROM odd_scoring.review_points WHERE player = player_id;
     IF saved THEN
-      SELECT 1 + count(*) FILTER (WHERE points > total), count(*) FILTER (WHERE points = total)
-      INTO current_rank, tied_players
-      FROM (SELECT count(*) AS points FROM odd_scoring.review_points
+      SELECT 1 + count(*) FILTER (WHERE points > total), 1 + count(*) FILTER (WHERE points > total - earned)
+      INTO current_rank, previous_rank
+      FROM (SELECT sum(half_points) AS points FROM odd_scoring.review_points
         WHERE player <> player_id GROUP BY player) AS others;
-      IF current_rank <= 10 AND (total = 1 OR tied_players > 0) THEN
+      IF current_rank <= 10 AND (answer_count = 1 OR previous_rank > current_rank) THEN
         promotion := current_rank;
       END IF;
     END IF;
-    RETURN jsonb_build_object('answer', voted_yes, 'points', total, 'promotion', promotion);
+    RETURN jsonb_build_object('answer', voted_yes, 'points', total / 2.0, 'answers', answer_count,
+      'promotion', promotion, 'earned', CASE WHEN saved THEN earned / 2.0 ELSE NULL END);
   END IF;
 
   RAISE SQLSTATE 'PT404' USING MESSAGE = 'This action is unavailable.';

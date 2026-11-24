@@ -95,28 +95,41 @@ async function checkSampling() {
     for (const user of [first, second]) {
       const card = (await play.next(user))!;
       assert(card.columns.some(column => column.name === 'B'));
-      assert.deepEqual(await play.answer(user, card.id, true), { points: 1, answer: true, promotion: 1 });
+      now += 2000;
+      assert.deepEqual(await play.answer(user, card.id, true),
+        { points: 1, answers: 1, earned: 1, answer: true, promotion: 1 });
     }
     now = Date.parse('2026-11-01T06:30:00Z');
     assert.equal((await play.leaderboard(first)).asOf, new Date(now).toISOString());
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 1]);
     const fallback = (await play.next(first))!;
     assert(fallback.columns.some(column => column.name === 'C'));
-    assert.deepEqual(await play.answer(first, fallback.id, false), { points: 2, answer: false, promotion: null });
+    now += 2000;
+    assert.deepEqual(await play.answer(first, fallback.id, false),
+      { points: 2, answers: 2, earned: 1, answer: false, promotion: null });
     assert.equal(await play.next(first), null);
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 2]);
     assert.equal((await play.leaderboard(first)).you?.points, 2);
     const movingUp = (await play.next(second))!;
-    assert.deepEqual(await play.answer(second, movingUp.id, false), { points: 2, answer: false, promotion: 1 });
+    now += 2000;
+    assert.deepEqual(await play.answer(second, movingUp.id, false),
+      { points: 2, answers: 2, earned: 1, answer: false, promotion: 1 });
     for (let i = 0; i < 8; i++) {
       const { player } = (await play.select('Ahead-' + i, false))!;
-      await store.run('INSERT INTO review_points VALUES (?, ?, ?), (?, ?, ?)',
+      await store.run('INSERT INTO review_points (player, receipt, answered_at) VALUES (?, ?, ?), (?, ?, ?)',
         player.id, 'fixture-one', now, player.id, 'fixture-two', now);
     }
     const outside = (await play.select('Outside', false))!.player;
     const outsideCard = (await play.next(outside))!;
+    now += 1999;
     assert.equal((await play.answer(outside, outsideCard.id, true))?.promotion, null);
     assert.equal((await play.leaderboard(outside)).you?.rank, 11);
+    assert.deepEqual(await play.totals(outside), { points: 0, answers: 1 });
+    const visitCard = (await play.next(outside))!;
+    const { proof } = play.recordLink(outside, visitCard.id, 'A')!;
+    assert.equal(play.recordLink(first, visitCard.id, 'B'), undefined);
+    now += 29999;
+    assert.equal((await play.answer(outside, visitCard.id, false, [proof, proof, 'fake']))?.earned, 16.5);
   } finally {
     db.close();
     catalog.close();
@@ -139,7 +152,7 @@ try {
   assert.equal(await (await request('session')).json(), null);
   assert.equal((await request('card')).status, 401);
   const first = await request('session', undefined, { name: '  Audit fan  ' });
-  assert.deepEqual(await first.json(), { name: 'Audit fan', points: 0 });
+  assert.deepEqual(await first.json(), { name: 'Audit fan', points: 0, answers: 0 });
   const cookie = sessionCookie(first);
   const taken = await request('session', undefined, { name: 'AUDIT FAN' });
   assert.equal(taken.status, 409);
@@ -168,25 +181,32 @@ try {
   assert.equal(unopened.prepare("SELECT name FROM sqlite_master WHERE name = 'pairs'").get(), undefined);
   unopened.close();
 
-  const save = { cardId: card.id, answer: prediction(card.id) };
+  const pair = tokens.read(1, card.id)!;
+  const fullCard = tokens.issue(1, pair, Date.now() - 31000);
+  const linkProofs = await Promise.all(['A', 'B'].map(async side =>
+    (await (await request('link', cookie, { cardId: fullCard, side })).json()).proof));
+  const save = { cardId: fullCard, answer: prediction(fullCard), linkProofs };
   const tampered = (card.id.startsWith('A') ? 'B' : 'A') + card.id.slice(1);
   assert.equal((await request('answer', cookie, { ...save, cardId: tampered })).status, 404);
-  const samePair = tokens.issue(1, tokens.read(1, card.id)!);
   const attempts = await Promise.all([
     request('answer', cookie, save),
-    request('answer', secondCookie, { ...save, cardId: samePair }),
+    request('answer', secondCookie, save),
   ]);
   const repeated = await Promise.all(attempts.map(attempt => attempt.json()));
   assert.equal(repeated.filter(result => result.promotion === 1).length, 1);
+  assert.equal(repeated.filter(result => result.earned === 20).length, 1);
   for (const result of repeated) {
-    assert.deepEqual({ ...result, promotion: null }, { answer: save.answer, points: 1, promotion: null });
+    assert.deepEqual({ ...result, promotion: null, earned: null },
+      { answer: save.answer, points: 20, answers: 1, promotion: null, earned: null });
   }
   const next = await (await request('card', secondCookie)).json();
   assert.notEqual(next.id, card.id);
   const disagreement = { cardId: next.id, answer: !prediction(next.id) };
-  assert.equal((await (await request('answer', secondCookie, disagreement)).json()).points, 2);
+  const secondVote = await (await request('answer', secondCookie, disagreement)).json();
+  assert.equal(secondVote.points, 20 + secondVote.earned);
   const board = await (await request('leaderboard', cookie)).json();
-  assert.deepEqual(board.you, { name: 'Audit fan', rank: 1, points: 2, livePoints: 2 });
+  assert.deepEqual(board.you, { name: 'Audit fan', rank: 1, points: secondVote.points,
+    livePoints: secondVote.points, answers: 2 });
 
   await stop();
   const recorded = openDb(dbFile);
@@ -194,7 +214,8 @@ try {
   assert.equal(recorded.prepare('SELECT COUNT(*) AS n FROM disagreements').get()?.n, 1);
   recorded.close();
   await start();
-  assert.deepEqual(await (await request('session', cookie)).json(), { name: 'Audit fan', points: 2 });
+  assert.deepEqual(await (await request('session', cookie)).json(),
+    { name: 'Audit fan', points: secondVote.points, answers: 2 });
   const rows = execFileSync(process.execPath, ['server/export.ts'], { env, encoding: 'utf8' })
     .trim().split('\n').map(line => JSON.parse(line));
   assert.equal(rows.length, 1);

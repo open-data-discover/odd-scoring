@@ -48,7 +48,7 @@ function player(req: express.Request) {
 app.get('/api/health', (_req, res) => { res.json({ ok: true }); });
 app.get('/api/session', async (req, res) => {
   const current = await player(req);
-  res.json(current ? { name: current.name, points: await play.points(current) } : null);
+  res.json(current ? { name: current.name, ...await play.totals(current) } : null);
 });
 app.post('/api/session', async (req, res) => {
   const name = typeof req.body?.name === 'string' ? req.body.name.trim().normalize('NFC') : '';
@@ -64,7 +64,7 @@ app.post('/api/session', async (req, res) => {
   res.cookie(cookieName, session.token, {
     httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: sessionAge,
   });
-  res.json({ name: session.player.name, points: await play.points(session.player) });
+  res.json({ name: session.player.name, ...await play.totals(session.player) });
 });
 app.get('/api/card', async (req, res) => {
   const current = await player(req);
@@ -74,18 +74,29 @@ app.get('/api/card', async (req, res) => {
   }
   res.json(await play.next(current));
 });
+app.post('/api/link', async (req, res) => {
+  const current = await player(req);
+  const { cardId, side } = req.body ?? {};
+  const result = current && typeof cardId === 'string' && (side === 'A' || side === 'B')
+    ? play.recordLink(current, cardId, side) : undefined;
+  if (!result) {
+    res.status(404).json({ error: 'This card is unavailable.' });
+    return;
+  }
+  res.json(result);
+});
 app.post('/api/answer', async (req, res) => {
   const current = await player(req);
   if (!current) {
     res.status(401).json({ error: 'Choose a username to save your answer.' });
     return;
   }
-  const { cardId, answer } = req.body ?? {};
+  const { cardId, answer, linkProofs } = req.body ?? {};
   if (typeof cardId !== 'string' || typeof answer !== 'boolean') {
     res.status(400).json({ error: 'Choose yes or no for the current card.' });
     return;
   }
-  const result = await play.answer(current, cardId, answer);
+  const result = await play.answer(current, cardId, answer, Array.isArray(linkProofs) ? linkProofs : []);
   if (!result) {
     res.status(404).json({ error: 'This card is unavailable. Reload to get your current card.' });
     return;
