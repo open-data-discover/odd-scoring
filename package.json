@@ -1,0 +1,41 @@
+{
+  "name": "odd-scoring",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "data": "node server/data.ts",
+    "dev": "vite",
+    "server": "node --env-file-if-exists=.env --watch server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "build:pages": "tsc --noEmit && vite build --mode pages",
+    "start": "node --env-file-if-exists=.env server/index.ts",
+    "export": "node --env-file-if-exists=.env server/export.ts",
+    "setup:db": "node --env-file-if-exists=.env scripts/setup.ts",
+    "publish:data": "node --env-file-if-exists=.env scripts/publish-data.ts",
+    "smoke": "node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "cookie": "^2.0.2",
+    "express": "^5.3.0",
+    "hyparquet": "^1.33.2",
+    "luxon": "^3.7.2",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/luxon": "^3.7.6",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

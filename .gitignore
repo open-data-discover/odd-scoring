@@ -221,3 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Join Check dependencies, source cache and local database
+node_modules/
+.data/
