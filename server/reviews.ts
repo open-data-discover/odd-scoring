@@ -58,7 +58,6 @@ export const reviewSchema = [
     answered_at bigint NOT NULL,
     PRIMARY KEY (player, receipt)
   )`,
-  'CREATE INDEX IF NOT EXISTS review_points_by_cutoff ON review_points(answered_at)',
   `CREATE TABLE IF NOT EXISTS disagreements (
     player integer NOT NULL,
     receipt text NOT NULL,

@@ -98,15 +98,12 @@ async function checkSampling() {
       assert.equal((await play.answer(user, card.id, true))?.points, 1);
     }
     now = Date.parse('2026-11-01T06:30:00Z');
-    assert.equal((await play.leaderboard(first)).asOf, '2026-11-01T04:00:00.000Z');
+    assert.equal((await play.leaderboard(first)).asOf, new Date(now).toISOString());
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 1]);
     const fallback = (await play.next(first))!;
     assert(fallback.columns.some(column => column.name === 'C'));
     assert.equal((await play.answer(first, fallback.id, false))?.points, 2);
     assert.equal(await play.next(first), null);
-    assert.equal((await play.leaderboard(first)).you?.points, 1);
-    now = Date.parse('2026-11-02T05:10:00Z');
-    assert.equal((await play.leaderboard(first)).asOf, '2026-11-02T05:00:00.000Z');
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 2]);
     assert.equal((await play.leaderboard(first)).you?.points, 2);
   } finally {
@@ -174,7 +171,7 @@ try {
   const disagreement = { cardId: next.id, answer: !prediction(next.id) };
   assert.equal((await (await request('answer', secondCookie, disagreement)).json()).points, 2);
   const board = await (await request('leaderboard', cookie)).json();
-  assert.deepEqual(board.you, { name: 'Audit fan', rank: null, points: 0, livePoints: 2 });
+  assert.deepEqual(board.you, { name: 'Audit fan', rank: 1, points: 2, livePoints: 2 });
 
   await stop();
   const recorded = openDb(dbFile);
@@ -190,7 +187,7 @@ try {
   assert.equal(rows[0].predicted_join, !disagreement.answer);
   assert(rows.every(row => row.source_sha === sourceSha && typeof row.answer === 'boolean'
     && row.analyzed_at && row.left.resource_id && row.right.resource_id));
-  console.log('Passed full-snapshot, sampling, HTTP voting, Toronto cutoff and restart/export smoke checks.');
+  console.log('Passed full-snapshot, sampling, HTTP voting, live rankings and restart/export smoke checks.');
 } finally {
   await stop();
   rmSync(temporary, { force: true, recursive: true });

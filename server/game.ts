@@ -1,5 +1,4 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { DateTime } from 'luxon';
 import { first } from './store.ts';
 import type { Query, Store } from './store.ts';
 import { reviewTokens } from './reviews.ts';
@@ -12,7 +11,6 @@ type Column = {
   resource_id: string; name: string; samples: string | null; score: number | null; analyzed_at: string;
 };
 type Rank = { name: string; rank: number; points: number };
-const zone = 'America/Toronto';
 export const sessionAge = 365 * 24 * 60 * 60 * 1000;
 
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -127,11 +125,10 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       });
     },
     async leaderboard(player?: Player) {
-      const cutoff = DateTime.fromMillis(now(), { zone }).startOf('day').toMillis();
       const entries = await db.all<Rank & { player: number; position: number }>(`
         WITH totals AS (
           SELECT player, CAST(COUNT(*) AS INTEGER) AS points
-          FROM review_points WHERE answered_at < ? GROUP BY player
+          FROM review_points GROUP BY player
         ), ranked AS (
           SELECT name, player, points,
             CAST(RANK() OVER (ORDER BY points DESC) AS INTEGER) AS rank,
@@ -140,15 +137,15 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
         )
         SELECT name, player, points, rank, position FROM ranked
         WHERE position <= 50 OR player = ? ORDER BY position
-      `, cutoff, player?.id ?? null);
+      `, player?.id ?? null);
       const top = entries.filter(entry => entry.position <= 50).map(({ name, rank, points }) =>
         ({ name, rank, points }));
       const rank = entries.find(entry => entry.player === player?.id);
       return {
-        asOf: new Date(cutoff).toISOString(),
+        asOf: new Date(now()).toISOString(),
         top,
         you: player ? { name: player.name, rank: rank?.rank ?? null, points: rank?.points ?? 0,
-          livePoints: await points(player) } : null,
+          livePoints: rank?.points ?? 0 } : null,
       };
     },
   };

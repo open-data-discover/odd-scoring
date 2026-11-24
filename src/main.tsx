@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { RealtimeClient } from '@supabase/realtime-js';
 import './style.css';
 
 type Player = { name: string; points: number };
@@ -83,23 +84,59 @@ function Modal({ title, close, children }: { title: string; close: () => void; c
 function RankPanel({ close }: { close: () => void }) {
   const [board, setBoard] = useState<Leaderboard>();
   const [error, setError] = useState('');
-  function load() {
-    setError('');
-    void api<Leaderboard>('leaderboard').then(setBoard).catch(error => setError(message(error)));
-  }
-  useEffect(load, []);
+  const refresh = useRef<() => void>(() => {});
+  useEffect(() => {
+    let active = true;
+    let connected = false;
+    let loading = false;
+    let queued = false;
+    function load() {
+      if (!active) return;
+      if (loading) {
+        queued = true;
+        return;
+      }
+      loading = true;
+      void api<Leaderboard>('leaderboard').then(next => {
+        if (!active) return;
+        setBoard(next);
+        setError('');
+      }).catch(failure => {
+        if (active) setError(message(failure));
+      }).finally(() => {
+        loading = false;
+        if (queued) {
+          queued = false;
+          load();
+        }
+      });
+    }
+
+    refresh.current = load;
+    load();
+    const timer = window.setInterval(() => { if (!connected) load(); }, 5000);
+    const realtime = apiOrigin ? new RealtimeClient(apiOrigin.replace(/^http/, 'ws') + '/realtime/v1', {
+      params: { apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
+    }) : undefined;
+    const channel = realtime?.channel('odd-scoring-leaderboard', { config: { private: false } })
+      .on('broadcast', { event: 'changed' }, load)
+      .subscribe(status => {
+        connected = status === 'SUBSCRIBED';
+        if (connected) load();
+      });
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      if (channel) void realtime?.removeChannel(channel);
+    };
+  }, []);
   return <Modal title="Leaderboard" close={close}>
-    {error && <p role="alert">{error} <button onClick={load}>Retry</button></p>}
+    {error && <p role="alert">{error} <button onClick={() => refresh.current()}>Retry</button></p>}
     {!board && !error && <p role="status">Loading rankings…</p>}
     {board && <>
-      <p className="muted">Updated daily at midnight Toronto time. Last update{' '}
-        {new Intl.DateTimeFormat('en-CA', { dateStyle: 'long', timeZone: 'America/Toronto' })
-          .format(new Date(board.asOf))}.
-      </p>
       {board.you && <div className="your-rank">
         <div><span>Your rank</span><strong>{board.you.rank === null ? 'Unranked' : '#' + board.you.rank}</strong></div>
-        <div><span>Points at update</span><strong>{board.you.points.toLocaleString()}</strong></div>
-        <div><span>Total answers</span><strong>{board.you.livePoints.toLocaleString()}</strong></div>
+        <div><span>Total answers</span><strong>{board.you.points.toLocaleString()}</strong></div>
       </div>}
       {board.top.length === 0 ? <p>No ranked players yet.</p> :
         <table>

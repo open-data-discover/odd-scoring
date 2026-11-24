@@ -18,6 +18,24 @@ CREATE TABLE IF NOT EXISTS odd_scoring.catalog_pairs (
   FOREIGN KEY (sha, b) REFERENCES odd_scoring.catalog_columns(sha, id)
 );
 
+CREATE OR REPLACE FUNCTION odd_scoring.notify_leaderboard()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  PERFORM realtime.send('{}'::jsonb, 'changed', 'odd-scoring-leaderboard', false);
+  RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+  -- A notification failure must not roll back a saved vote.
+  RAISE WARNING 'Join Check leaderboard notification failed (%).', SQLSTATE;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION odd_scoring.notify_leaderboard() FROM PUBLIC;
+CREATE OR REPLACE TRIGGER review_points_notify_leaderboard
+  AFTER INSERT ON odd_scoring.review_points
+  FOR EACH ROW EXECUTE FUNCTION odd_scoring.notify_leaderboard();
+DROP INDEX IF EXISTS odd_scoring.review_points_by_cutoff;
+
 CREATE OR REPLACE FUNCTION odd_scoring.review_receipt(
   player_id integer, source_sha text, pool_name text, pair_number integer, receipt_key bytea
 ) RETURNS text LANGUAGE sql IMMUTABLE SET search_path = '' AS $$
@@ -36,7 +54,6 @@ DECLARE
   receipt_key bytea;
   new_token text;
   current_ms bigint := floor(extract(epoch FROM statement_timestamp()) * 1000);
-  cutoff timestamptz := date_trunc('day', statement_timestamp(), 'America/Toronto');
   ranked jsonb;
   own_rank jsonb;
   total integer;
@@ -87,17 +104,15 @@ BEGIN
     );
   END IF;
 
-  IF action IN ('session', 'select', 'leaderboard') THEN
-    IF player_id IS NOT NULL THEN
-      SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;
-    END IF;
-    IF action IN ('session', 'select') THEN
-      IF player_id IS NULL THEN RETURN 'null'::jsonb; END IF;
-      RETURN jsonb_strip_nulls(jsonb_build_object('name', player_name, 'points', total, 'token', new_token));
-    END IF;
+  IF action IN ('session', 'select') THEN
+    IF player_id IS NULL THEN RETURN 'null'::jsonb; END IF;
+    SELECT count(*) INTO total FROM odd_scoring.review_points WHERE player = player_id;
+    RETURN jsonb_strip_nulls(jsonb_build_object('name', player_name, 'points', total, 'token', new_token));
+  END IF;
+  IF action = 'leaderboard' THEN
     WITH totals AS (
       SELECT player, count(*) AS points FROM odd_scoring.review_points
-      WHERE answered_at < extract(epoch FROM cutoff) * 1000 GROUP BY player
+      GROUP BY player
     ), ranks AS (
       SELECT p.id, p.name, t.points, rank() OVER (ORDER BY t.points DESC) AS rank,
         row_number() OVER (ORDER BY t.points DESC, p.name_key) AS position
@@ -107,9 +122,10 @@ BEGIN
       ORDER BY position) FILTER (WHERE position <= 50), '[]'::jsonb),
       (jsonb_agg(jsonb_build_object('rank', rank, 'points', points)) FILTER (WHERE id = player_id))->0
     INTO ranked, own_rank FROM ranks;
-    RETURN jsonb_build_object('asOf', cutoff, 'top', ranked, 'you',
+    RETURN jsonb_build_object('asOf', statement_timestamp(), 'top', ranked, 'you',
       CASE WHEN player_id IS NULL THEN NULL ELSE jsonb_build_object('name', player_name,
-        'livePoints', total, 'rank', own_rank->'rank', 'points', coalesce(own_rank->'points','0'::jsonb)) END);
+        'livePoints', coalesce(own_rank->'points','0'::jsonb),
+        'rank', own_rank->'rank', 'points', coalesce(own_rank->'points','0'::jsonb)) END);
   END IF;
 
   IF player_id IS NULL THEN

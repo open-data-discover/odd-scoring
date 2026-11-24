@@ -2,7 +2,7 @@
 
 Join Check collects human judgments on whether two Toronto Open Data columns
 represent the same thing. Each answer earns one point for the selected username.
-The leaderboard uses totals as of midnight in Toronto.
+The leaderboard ranks all saved answers and refreshes when new votes are saved.
 Cards show sample values from the pinned analysis and dataset descriptions
 from the City of Toronto’s catalog when available.
 
@@ -47,8 +47,8 @@ Use the Supabase **Session pooler** connection URI and the project's CA
 certificate. Run `npm run setup:db` once to create the private `odd_scoring`
 schema. `players` and `sessions` record usernames and
 sign-ins. `review_points` records completions. `disagreements` records the
-pairs and answers that differed from the prediction. The leaderboard queries
-points recorded before midnight Toronto time.
+pairs and answers that differed from the prediction. Supabase Realtime notifies
+open leaderboards when a vote earns a new review point.
 
 ## Publish on GitHub Pages
 

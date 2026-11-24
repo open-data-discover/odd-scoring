@@ -18,6 +18,7 @@ try {
           odd_scoring.rankings, odd_scoring.leaderboard_days, odd_scoring.cards,
           odd_scoring.sessions, odd_scoring.players, odd_scoring.column_examples,
           odd_scoring.pairs, odd_scoring.columns, odd_scoring.imports;
+        DROP FUNCTION IF EXISTS odd_scoring.notify_leaderboard();
         DROP SCHEMA IF EXISTS odd_scoring;
       `);
     } else {
