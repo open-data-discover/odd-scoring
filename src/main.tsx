@@ -361,7 +361,8 @@ function App() {
         <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
         <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
           columns refer to the same kind of entity or attribute, or <strong>No</strong> if they mean different things.</p>
-        <p className="score-hint">Earn 1 point every 2 seconds for up to 30 seconds, plus 2.5 points per dataset link.</p>
+        <p className="score-hint">Earn 5 points for answering, up to 10 more for review time
+          (1 every 2 seconds), and 2.5 per dataset link.</p>
         {card && <>
           <div className="pair" key={card.id}>
             <Record column={card.columns[0]} side="A" visit={visit} />

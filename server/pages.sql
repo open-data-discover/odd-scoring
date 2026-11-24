@@ -212,7 +212,7 @@ BEGIN
     IF jsonb_typeof(payload->'answer') IS DISTINCT FROM 'boolean' THEN
       RAISE SQLSTATE 'PT400' USING MESSAGE = 'Choose yes or no for the current card.';
     END IF;
-    earned := least(15, greatest(0, (current_ms - coalesce((card->>'issued')::bigint, current_ms)) / 2000)) * 2;
+    earned := (5 + least(10, greatest(0, (current_ms - coalesce((card->>'issued')::bigint, current_ms)) / 2000))) * 2;
     FOREACH link_side IN ARRAY ARRAY['A', 'B'] LOOP
       proof := encode(extensions.hmac(convert_to(format('[%s,%s]', to_json(payload->>'cardId'),
         to_json(link_side)), 'UTF8'), link_key, 'sha256'), 'hex');

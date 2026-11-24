@@ -113,9 +113,9 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       const receipt = tokens.receipt(player.id, pair);
       const predicted = pair.pool === 'detected';
       const answeredAt = now();
-      const timePoints = Math.min(15, Math.max(0, Math.floor((answeredAt - (pair.issued ?? answeredAt)) / 2000)));
+      const timePoints = Math.min(10, Math.max(0, Math.floor((answeredAt - (pair.issued ?? answeredAt)) / 2000)));
       const linkCount = (['A', 'B'] as const).filter(side => proofs.includes(tokens.link(id, side))).length;
-      const halfPoints = timePoints * 2 + linkCount * 5;
+      const halfPoints = (5 + timePoints) * 2 + linkCount * 5;
       return db.transaction(async query => {
         if (db.postgres) await query.all('SELECT id FROM players WHERE id = ? FOR UPDATE', player.id);
         const saved = await query.run(`

@@ -97,7 +97,7 @@ async function checkSampling() {
       assert(card.columns.some(column => column.name === 'B'));
       now += 2000;
       assert.deepEqual(await play.answer(user, card.id, true),
-        { points: 1, answers: 1, earned: 1, answer: true, promotion: 1 });
+        { points: 6, answers: 1, earned: 6, answer: true, promotion: 1 });
     }
     now = Date.parse('2026-11-01T06:30:00Z');
     assert.equal((await play.leaderboard(first)).asOf, new Date(now).toISOString());
@@ -106,29 +106,29 @@ async function checkSampling() {
     assert(fallback.columns.some(column => column.name === 'C'));
     now += 2000;
     assert.deepEqual(await play.answer(first, fallback.id, false),
-      { points: 2, answers: 2, earned: 1, answer: false, promotion: null });
+      { points: 12, answers: 2, earned: 6, answer: false, promotion: null });
     assert.equal(await play.next(first), null);
     assert.deepEqual((await play.leaderboard()).top.map(row => row.rank), [1, 2]);
-    assert.equal((await play.leaderboard(first)).you?.points, 2);
+    assert.equal((await play.leaderboard(first)).you?.points, 12);
     const movingUp = (await play.next(second))!;
     now += 2000;
     assert.deepEqual(await play.answer(second, movingUp.id, false),
-      { points: 2, answers: 2, earned: 1, answer: false, promotion: 1 });
+      { points: 12, answers: 2, earned: 6, answer: false, promotion: 1 });
     for (let i = 0; i < 8; i++) {
       const { player } = (await play.select('Ahead-' + i, false))!;
-      await store.run('INSERT INTO review_points (player, receipt, answered_at) VALUES (?, ?, ?), (?, ?, ?)',
-        player.id, 'fixture-one', now, player.id, 'fixture-two', now);
+      await store.run('INSERT INTO review_points (player, receipt, answered_at, half_points) VALUES (?, ?, ?, ?)',
+        player.id, 'fixture-one', now, 24);
     }
     const outside = (await play.select('Outside', false))!.player;
     const outsideCard = (await play.next(outside))!;
     now += 1999;
     assert.equal((await play.answer(outside, outsideCard.id, true))?.promotion, null);
     assert.equal((await play.leaderboard(outside)).you?.rank, 11);
-    assert.deepEqual(await play.totals(outside), { points: 0, answers: 1 });
+    assert.deepEqual(await play.totals(outside), { points: 5, answers: 1 });
     const visitCard = (await play.next(outside))!;
     const { proof } = play.recordLink(outside, visitCard.id, 'A')!;
     assert.equal(play.recordLink(first, visitCard.id, 'B'), undefined);
-    now += 29999;
+    now += 19999;
     assert.equal((await play.answer(outside, visitCard.id, false, [proof, proof, 'fake']))?.earned, 16.5);
   } finally {
     db.close();
@@ -182,7 +182,7 @@ try {
   unopened.close();
 
   const pair = tokens.read(1, card.id)!;
-  const fullCard = tokens.issue(1, pair, Date.now() - 31000);
+  const fullCard = tokens.issue(1, pair, Date.now() - 21000);
   const linkProofs = await Promise.all(['A', 'B'].map(async side =>
     (await (await request('link', cookie, { cardId: fullCard, side })).json()).proof));
   const save = { cardId: fullCard, answer: prediction(fullCard), linkProofs };

@@ -75,7 +75,7 @@ timestamp. A **No** on a detected pair or a **Yes** on a random pair counts as a
 disagreement. All detected candidates count as predicted joins, including those
 below the Open Data Discover display cutoff.
 
-Showing a card does not create a database row. A completed vote earns one point
-per two seconds, up to 15 points, and 2.5 points for each dataset link opened on
-that card. `review_points` stores the earned score, reviewer, completion time,
+Showing a card does not create a database row. A completed vote earns 5 points,
+plus 1 point per two seconds up to 10 time points and 2.5 points for each dataset
+link opened on that card. `review_points` stores the earned score, reviewer, completion time,
 and an opaque deduplication receipt. Only `disagreements` stores the pair and vote.
