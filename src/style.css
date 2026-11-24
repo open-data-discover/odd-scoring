@@ -41,6 +41,8 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; }
+#root { isolation: isolate; min-height: 100vh; }
+.dot-grid { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled, button[aria-disabled="true"] { cursor: wait; opacity: .65; }
@@ -118,7 +120,9 @@ input {
   border-bottom: 1px solid var(--line);
 }
 .player-line strong { color: var(--ink); font-variant-numeric: tabular-nums; }
-.hint { max-width: 40rem; margin: .9rem 0 1.65rem; }
+.review-question { max-width: none; font-size: clamp(1.35rem, 4vw, 1.8rem); line-height: 1.25; }
+.hint { max-width: 44rem; margin: .55rem 0 1.25rem; }
+.hint strong { color: var(--ink); }
 .pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -148,25 +152,22 @@ input {
 }
 .record h2 { font-size: clamp(1.25rem, 3vw, 1.65rem); margin: .65rem 0 .85rem; line-height: 1.25; letter-spacing: -.015em; }
 .record-details { padding-top: .7rem; border-top: 1px solid var(--line); }
-.record p { margin: 0 0 .2rem; font-size: .95rem; }
-.record a { display: inline-block; margin-top: .45rem; font-weight: 650; }
-.dataset-description { margin-top: .65rem; }
+.record-source { margin: 0; }
+.record-source dt, .examples caption { color: var(--muted); font-size: .82rem; font-weight: 650; }
+.record-source dt:not(:first-child) { margin-top: .5rem; }
+.record-source dd { margin: 0; font-size: .95rem; }
+.record-source a { font-weight: 650; }
+.dataset-description { margin-top: .85rem; }
 .dataset-description summary { cursor: pointer; color: var(--accent); font-size: .88rem; width: fit-content; }
-.dataset-description p { margin-top: .4rem; color: var(--muted); font-size: .88rem; }
-.examples { margin-top: .8rem; }
-.examples p { color: var(--muted); font-size: .82rem; font-weight: 600; }
-.examples ul { padding: 0; margin: .35rem 0 0; display: flex; gap: .3rem; list-style: none; }
-.examples li { min-width: 0; }
+.dataset-description p { margin: .35rem 0 0; color: var(--muted); font-size: .88rem; }
+.examples { margin-top: .8rem; border: 1px solid var(--line); table-layout: fixed; background: var(--bg); }
+.examples caption { text-align: left; margin-bottom: .25rem; }
+.examples td { padding: .32rem .55rem; }
+.examples tr + tr { border-top: 1px solid var(--line); }
 .examples code {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: .25rem;
-  padding: .12rem .36rem;
-  font-size: .78rem;
+  font-size: .82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .vote { display: flex; justify-content: center; gap: .75rem; margin-top: 1.3rem; }
 .vote button { min-width: min(36vw, 9rem); min-height: 3.1rem; }
@@ -214,8 +215,8 @@ dialog::backdrop { background: #15181b99; }
 .your-rank span { display: block; color: var(--muted); font-size: .85rem; }
 .your-rank strong { display: block; margin-top: .15rem; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
-th, td { padding: .55rem .38rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-th:last-child, td:last-child { text-align: right; }
+dialog th, dialog td { padding: .55rem .38rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+dialog th:last-child, dialog td:last-child { text-align: right; }
 .current { background: var(--accent-soft); }
 .error { color: var(--danger); }
 .sr-only {

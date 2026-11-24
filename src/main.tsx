@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RealtimeClient } from '@supabase/realtime-js';
+import DotGrid from './DotGrid';
 import './style.css';
 
 type Player = { name: string; points: number };
@@ -154,18 +155,24 @@ function Record({ column, side }: { column: Column; side: string }) {
     <div className="record-label"><span aria-hidden="true">{side}</span> Column {side}</div>
     <h2>{column.name}</h2>
     <div className="record-details">
-      <p className="resource">{column.resource}</p>
-      <a href={column.url} target="_blank" rel="noreferrer">{column.dataset}<span aria-hidden="true">&nbsp;↗</span>
-        <span className="sr-only"> (opens in a new tab)</span></a>
-      {column.description && <details key={column.url} className="dataset-description">
+      <dl className="record-source">
+        <dt>Dataset</dt>
+        <dd><a href={column.url} target="_blank" rel="noreferrer">{column.dataset}<span aria-hidden="true">&nbsp;↗</span>
+          <span className="sr-only"> (opens in a new tab)</span></a></dd>
+        {column.resource && column.resource !== column.dataset && <>
+          <dt>Resource</dt>
+          <dd>{column.resource}</dd>
+        </>}
+      </dl>
+      {column.examples.length > 0 && <table className="examples">
+        <caption>Example values</caption>
+        <tbody>{column.examples.map((value, i) =>
+          <tr key={i}><td><code>{value}</code></td></tr>)}</tbody>
+      </table>}
+      {column.description && <details open className="dataset-description">
         <summary>Dataset description</summary>
         <p>{column.description}</p>
       </details>}
-      {column.examples.length > 0 && <div className="examples">
-        <p>Example values</p>
-        <ul aria-label="Example values">{column.examples.map((value, i) =>
-          <li key={i}><code title={value}>{value}</code></li>)}</ul>
-      </div>}
     </div>
   </article>;
 }
@@ -269,6 +276,7 @@ function App() {
   }
 
   return <>
+    <DotGrid />
     <header className="top">
       <div className="top-inner">
         <div className="brand"><span className="brand-mark" aria-hidden="true" /> Join Check</div>
@@ -291,10 +299,11 @@ function App() {
         <div className="player-line"><span>{player.name}</span>
           <span><strong>{player.points.toLocaleString()}</strong> {player.points === 1 ? 'answer' : 'answers'}</span>
         </div>
-        <h1>Do these columns represent the same kind of thing?</h1>
-        <p className="hint">A driver’s licence number and an ice cream vendor’s licence number might match by chance.</p>
+        <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
+        <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
+          columns refer to the same kind of entity or attribute, or <strong>No</strong> if they mean different things.</p>
         {card && <>
-          <div className="pair">
+          <div className="pair" key={card.id}>
             <Record column={card.columns[0]} side="A" />
             <Record column={card.columns[1]} side="B" />
           </div>
