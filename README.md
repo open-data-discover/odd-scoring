@@ -71,9 +71,8 @@ one JSON object per disagreement. The command uses Postgres when `DATABASE_URL`
 is set and the local SQLite file otherwise. Each
 record includes the upstream SHA, both columns, the sampling pool, the
 detector score when available, a reviewer ID, the prediction, the answer, and its
-timestamp. The on-screen Yes and No buttons indicate agreement with the
-prediction. The exported answer indicates whether the reviewer thinks the
-columns represent the same thing. All detected candidates count as predicted joins, including those
+timestamp. The on-screen vote and the exported answer indicate whether the
+reviewer thinks the columns represent the same thing. All detected candidates count as predicted joins, including those
 below the Open Data Discover display cutoff.
 
 Showing a card does not create a database row. A completed vote earns 5 points,

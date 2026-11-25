@@ -329,7 +329,7 @@ function App() {
     linkVisits.current.set(side, request);
   }
 
-  async function vote(agrees: boolean, button: HTMLButtonElement) {
+  async function vote(answer: boolean, button: HTMLButtonElement) {
     if (!card || !player || voteInProgress.current || awaitingNext) return;
     voteInProgress.current = true;
     setError('');
@@ -339,7 +339,7 @@ function App() {
     try {
       const linkProofs = (await Promise.all(linkVisits.current.values())).filter(proof => proof !== null);
       const result = await api<{ points: number; answers: number; promotion: number | null; earned: number | null }>(
-        'answer', { cardId: card.id, answer: agrees === card.predictedJoin, linkProofs });
+        'answer', { cardId: card.id, answer, linkProofs });
       setPlayer({ ...player, points: result.points, answers: result.answers });
       if (result.promotion != null) setPromotion({ rank: result.promotion });
       standings.refresh();
@@ -415,9 +415,9 @@ function App() {
           </button>
         </div>
         {card && <>
-          <h1 className="review-question">We think these two columns {card.predictedJoin ? 'represent' : 'do not represent'} the same thing. Are we right?</h1>
-          <p className="hint">Review the dataset descriptions and examples. Vote <strong>Yes</strong> if you agree
-            with our prediction, or <strong>No</strong> if you disagree.</p>
+          <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
+          <p className="hint">Review the dataset descriptions and examples, then vote <strong>Yes</strong> or <strong>No</strong>.
+            {' '}Our prediction is <strong>{card.predictedJoin ? 'Yes' : 'No'}</strong>.</p>
           <div className="pair" key={card.id}>
             <Record column={card.columns[0]} side="A" visit={visit} />
             <Record column={card.columns[1]} side="B" visit={visit} />
