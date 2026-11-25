@@ -101,7 +101,7 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       }));
       // Present either column first independently of Parquet order.
       if (randomInt(2)) columns.reverse();
-      return { id: tokens.issue(player.id, { sha, pool, ordinal }, now()), columns };
+      return { id: tokens.issue(player.id, { sha, pool, ordinal }, now()), columns, predictedJoin: pool === 'detected' };
     },
     recordLink(player: Player, id: string, side: LinkSide) {
       if (!tokens.read(player.id, id)) return undefined;

@@ -11,7 +11,7 @@ type Column = {
   name: string; resource: string; dataset: string; url: string;
   description: string | null; examples: string[];
 };
-type Card = { id: string; columns: [Column, Column] };
+type Card = { id: string; columns: [Column, Column]; predictedJoin: boolean };
 type Rank = { name: string; rank: number; points: number };
 type Leaderboard = {
   asOf: string;
@@ -184,6 +184,13 @@ function Crown({ rank }: { rank: number }) {
   </svg>;
 }
 
+function RollingNumber({ value, roll }: { value: number; roll?: { id: number; previous: number } }) {
+  return <span className="score-value" key={roll?.id} data-rolling={!!roll}>
+    {roll && <span className="score-previous" aria-hidden="true">{roll.previous.toLocaleString()}</span>}
+    <strong>{value.toLocaleString()}</strong>
+  </span>;
+}
+
 function Record({ column, side, visit }: { column: Column; side: LinkSide; visit: (side: LinkSide) => void }) {
   return <article className="record">
     <div className="record-label"><span aria-hidden="true">{side}</span> Column {side}</div>
@@ -233,7 +240,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [burst, setBurst] = useState<{ id: number; x: number; y: number; earned: number; total: number }>();
+  const [burst, setBurst] = useState<{ id: number; x: number; y: number; earned: number;
+    total: number; answers: number }>();
   const [showBadges, setShowBadges] = useState(false);
   const [awaitingNext, setAwaitingNext] = useState(false);
   const [promotion, setPromotion] = useState<{ rank: number }>();
@@ -246,6 +254,7 @@ function App() {
   const answerCount = Math.max(player?.answers ?? 0, yourStanding?.answers ?? 0);
   const pointCount = Math.max(player?.points ?? 0, yourStanding?.points ?? 0);
   const rollingScore = burst?.total === pointCount ? burst : undefined;
+  const rollingAnswers = burst?.answers === answerCount ? burst : undefined;
   const badges: Badge[] = [
     { name: 'Join the Club', requirement: 'Answer your first card.', earned: answerCount >= 1 },
     { name: 'Century Club', requirement: 'Earn 100 points.', earned: pointCount >= 100 },
@@ -320,7 +329,7 @@ function App() {
     linkVisits.current.set(side, request);
   }
 
-  async function vote(answer: boolean, button: HTMLButtonElement) {
+  async function vote(agrees: boolean, button: HTMLButtonElement) {
     if (!card || !player || voteInProgress.current || awaitingNext) return;
     voteInProgress.current = true;
     setError('');
@@ -330,7 +339,7 @@ function App() {
     try {
       const linkProofs = (await Promise.all(linkVisits.current.values())).filter(proof => proof !== null);
       const result = await api<{ points: number; answers: number; promotion: number | null; earned: number | null }>(
-        'answer', { cardId: card.id, answer, linkProofs });
+        'answer', { cardId: card.id, answer: agrees === card.predictedJoin, linkProofs });
       setPlayer({ ...player, points: result.points, answers: result.answers });
       if (result.promotion != null) setPromotion({ rank: result.promotion });
       standings.refresh();
@@ -338,7 +347,8 @@ function App() {
       setAwaitingNext(true);
       const rect = button.getBoundingClientRect();
       if (result.earned != null) {
-        setBurst({ id: Date.now(), earned: result.earned, total: result.points, x: rect.left + rect.width / 2,
+        setBurst({ id: Date.now(), earned: result.earned, total: result.points, answers: result.answers,
+          x: rect.left + rect.width / 2,
           y: Math.max(24, Math.min(window.innerHeight - 10, rect.top + rect.height / 2)) });
       }
       await getCard();
@@ -389,27 +399,25 @@ function App() {
               {yourRank <= 3 && <Crown rank={yourRank} />} Rank <strong>#{yourRank}</strong>
             </>}</span>
             <span className="score">
-              <span className="score-value" key={rollingScore?.id} data-rolling={!!rollingScore}>
-                {rollingScore && <span className="score-previous" aria-hidden="true">
-                  {(rollingScore.total - rollingScore.earned).toLocaleString()}
-                </span>}
-                <strong>{pointCount.toLocaleString()}</strong>
-              </span>
+              <RollingNumber value={pointCount} roll={rollingScore &&
+                { id: rollingScore.id, previous: rollingScore.total - rollingScore.earned }} />
               {pointCount === 1 ? 'point' : 'points'}
               {burst && <span className="score-add" aria-hidden="true">+{burst.earned.toLocaleString()}</span>}
             </span>
-            <span><strong>{answerCount.toLocaleString()}</strong> {answerCount === 1 ? 'answer' : 'answers'}</span>
+            <span className="answer-count">
+              <RollingNumber value={answerCount} roll={rollingAnswers &&
+                { id: rollingAnswers.id, previous: rollingAnswers.answers - 1 }} />
+              {answerCount === 1 ? 'answer' : 'answers'}
+            </span>
           </div>
           <button className="outline badge-button" type="button" onClick={() => setShowBadges(true)}>
             Badges <span>{badgesEarned}/{badges.length}</span>
           </button>
         </div>
-        <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
-        <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
-          columns refer to the same kind of entity or attribute, or <strong>No</strong> if they mean different things.</p>
-        <p className="score-hint">Earn 5 points for answering, up to 10 more for review time
-          (1 every 2 seconds), and 2.5 per dataset link.</p>
         {card && <>
+          <h1 className="review-question">We think these two columns {card.predictedJoin ? 'represent' : 'do not represent'} the same thing. Are we right?</h1>
+          <p className="hint">Review the dataset descriptions and examples. Vote <strong>Yes</strong> if you agree
+            with our prediction, or <strong>No</strong> if you disagree.</p>
           <div className="pair" key={card.id}>
             <Record column={card.columns[0]} side="A" visit={visit} />
             <Record column={card.columns[1]} side="B" visit={visit} />

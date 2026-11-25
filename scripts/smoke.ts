@@ -89,6 +89,7 @@ async function checkSampling() {
     for (roll = 0; roll < 4; roll++) {
       const user = (await play.select('sample-' + roll, false))!.player;
       const card = (await play.next(user))!;
+      assert.equal(card.predictedJoin, roll !== 3);
       assert(card.columns.some(column => column.name === (roll === 3 ? 'C' : 'B')));
     }
     roll = 0;
@@ -175,7 +176,8 @@ try {
   assert.notEqual(cookie, secondCookie);
 
   const card = await (await request('card', cookie)).json();
-  assert.deepEqual(Object.keys(card).sort(), ['columns', 'id']);
+  assert.deepEqual(Object.keys(card).sort(), ['columns', 'id', 'predictedJoin']);
+  assert.equal(card.predictedJoin, prediction(card.id));
   assert.equal(card.columns.length, 2);
   for (const column of card.columns) {
     assert.deepEqual(Object.keys(column).sort(),

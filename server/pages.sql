@@ -188,7 +188,8 @@ BEGIN
     SELECT jsonb_agg(c.details - 'resource_id' - 'package' - 'column_id' ORDER BY c.id)
     INTO columns FROM odd_scoring.catalog_columns AS c WHERE c.sha = snapshot_sha AND c.id IN (pair.a, pair.b);
     IF random() < 0.5 THEN columns := jsonb_build_array(columns->1, columns->0); END IF;
-    RETURN jsonb_build_object('columns', columns, 'id', replace(encode(extensions.pgp_sym_encrypt(
+    RETURN jsonb_build_object('columns', columns, 'predictedJoin', pool_name = 'detected',
+      'id', replace(encode(extensions.pgp_sym_encrypt(
       jsonb_build_object('player', player_id, 'sha', snapshot_sha, 'pool', pool_name,
         'ordinal', pair_number, 'issued', current_ms)::text,
       review_key, 'cipher-algo=aes256, s2k-mode=1'), 'base64'), chr(10), ''));
