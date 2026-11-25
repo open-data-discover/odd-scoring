@@ -130,6 +130,19 @@ async function checkSampling() {
     assert.equal(play.recordLink(first, visitCard.id, 'B'), undefined);
     now += 19999;
     assert.equal((await play.answer(outside, visitCard.id, false, [proof, proof, 'fake']))?.earned, 16.5);
+    const sprinter = (await play.select('Sprinter', false))!.player;
+    for (let i = 0; i < 5; i++) {
+      await store.run('INSERT INTO review_points (player, receipt, answered_at) VALUES (?, ?, ?)',
+        sprinter.id, 'speed-' + i, now + i * 24000);
+    }
+    assert.equal((await play.leaderboard(sprinter)).you?.speedBadge, false);
+    await store.run('INSERT INTO review_points (player, receipt, answered_at) VALUES (?, ?, ?)',
+      sprinter.id, 'speed-5', now + 120001);
+    assert.equal((await play.leaderboard(sprinter)).you?.speedBadge, false);
+    await store.run('UPDATE review_points SET answered_at = ? WHERE player = ? AND receipt = ?',
+      now + 120000, sprinter.id, 'speed-5');
+    now += 3600000;
+    assert.equal((await play.leaderboard(sprinter)).you?.speedBadge, true);
   } finally {
     db.close();
     catalog.close();
@@ -206,7 +219,7 @@ try {
   assert.equal(secondVote.points, 20 + secondVote.earned);
   const board = await (await request('leaderboard', cookie)).json();
   assert.deepEqual(board.you, { name: 'Audit fan', rank: 1, points: secondVote.points,
-    livePoints: secondVote.points, answers: 2 });
+    livePoints: secondVote.points, answers: 2, speedBadge: false });
 
   await stop();
   const recorded = openDb(dbFile);

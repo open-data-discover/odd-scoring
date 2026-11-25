@@ -59,6 +59,7 @@ DECLARE
   current_ms bigint := floor(extract(epoch FROM statement_timestamp()) * 1000);
   ranked jsonb;
   own_rank jsonb;
+  speed_badge boolean;
   total bigint;
   answer_count integer;
   snapshot_sha text;
@@ -134,10 +135,17 @@ BEGIN
       ORDER BY position) FILTER (WHERE position <= 50), '[]'::jsonb),
       (jsonb_agg(jsonb_build_object('rank', rank, 'points', points, 'answers', answers)) FILTER (WHERE id = player_id))->0
     INTO ranked, own_rank FROM ranks;
+    SELECT EXISTS (
+      SELECT 1 FROM (
+        SELECT p.answered_at - lag(p.answered_at, 5) OVER (ORDER BY p.answered_at, p.receipt) AS elapsed
+        FROM odd_scoring.review_points AS p WHERE p.player = player_id
+      ) AS windows WHERE elapsed <= 120000
+    ) INTO speed_badge;
     RETURN jsonb_build_object('asOf', statement_timestamp(), 'top', ranked, 'you',
       CASE WHEN player_id IS NULL THEN NULL ELSE jsonb_build_object('name', player_name,
         'livePoints', coalesce(own_rank->'points','0'::jsonb),
         'answers', coalesce(own_rank->'answers','0'::jsonb),
+        'speedBadge', speed_badge,
         'rank', own_rank->'rank', 'points', coalesce(own_rank->'points','0'::jsonb)) END);
   END IF;
 

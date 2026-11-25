@@ -16,8 +16,10 @@ type Rank = { name: string; rank: number; points: number };
 type Leaderboard = {
   asOf: string;
   top: Rank[];
-  you: (Omit<Rank, 'rank'> & { rank: number | null; answers: number }) | null;
+  you: (Omit<Rank, 'rank'> & { rank: number | null; answers: number; speedBadge: boolean }) | null;
 };
+
+type Badge = { name: string; requirement: string; earned: boolean };
 
 class RequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -163,6 +165,25 @@ function RankPanel({ close, board, error, refresh }: {
   </Modal>;
 }
 
+function BadgePanel({ badges, close }: { badges: Badge[]; close: () => void }) {
+  return <Modal title="Badges" close={close}>
+    <ul className="badges">
+      {badges.map(badge => <li key={badge.name} data-earned={badge.earned}>
+        <div><strong>{badge.name}</strong><p>{badge.requirement}</p></div>
+        <span>{badge.earned ? 'Earned' : 'Locked'}</span>
+      </li>)}
+    </ul>
+  </Modal>;
+}
+
+function Crown({ rank }: { rank: number }) {
+  return <svg aria-hidden="true" className="rank-crown" data-rank={rank}
+    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+    <path d="m3 6 4.5 4L12 4l4.5 6L21 6l-2.5 12h-13L3 6Z" />
+    <path d="M7 14h10" />
+  </svg>;
+}
+
 function Record({ column, side, visit }: { column: Column; side: LinkSide; visit: (side: LinkSide) => void }) {
   return <article className="record">
     <div className="record-label"><span aria-hidden="true">{side}</span> Column {side}</div>
@@ -212,7 +233,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [burst, setBurst] = useState<{ id: number; x: number; y: number; earned: number }>();
+  const [burst, setBurst] = useState<{ id: number; x: number; y: number; earned: number; total: number }>();
+  const [showBadges, setShowBadges] = useState(false);
   const [awaitingNext, setAwaitingNext] = useState(false);
   const [promotion, setPromotion] = useState<{ rank: number }>();
   const nameInput = useRef<HTMLInputElement>(null);
@@ -223,6 +245,16 @@ function App() {
   const yourRank = yourStanding?.rank;
   const answerCount = Math.max(player?.answers ?? 0, yourStanding?.answers ?? 0);
   const pointCount = Math.max(player?.points ?? 0, yourStanding?.points ?? 0);
+  const rollingScore = burst?.total === pointCount ? burst : undefined;
+  const badges: Badge[] = [
+    { name: 'Join the Club', requirement: 'Answer your first card.', earned: answerCount >= 1 },
+    { name: 'Century Club', requirement: 'Earn 100 points.', earned: pointCount >= 100 },
+    { name: 'Double Join', requirement: 'Earn 200 points.', earned: pointCount >= 200 },
+    { name: 'The Big Five-Oh-Oh', requirement: 'Earn 500 points.', earned: pointCount >= 500 },
+    { name: 'Grand Joinmaster', requirement: 'Earn 1,000 points.', earned: pointCount >= 1000 },
+    { name: 'On a Roll', requirement: 'Answer 6 cards in 2 minutes.', earned: yourStanding?.speedBadge ?? false },
+  ];
+  const badgesEarned = badges.filter(badge => badge.earned).length;
 
   useEffect(() => {
     if (!promotion) return;
@@ -306,7 +338,7 @@ function App() {
       setAwaitingNext(true);
       const rect = button.getBoundingClientRect();
       if (result.earned != null) {
-        setBurst({ id: Date.now(), earned: result.earned, x: rect.left + rect.width / 2,
+        setBurst({ id: Date.now(), earned: result.earned, total: result.points, x: rect.left + rect.width / 2,
           y: Math.max(24, Math.min(window.innerHeight - 10, rect.top + rect.height / 2)) });
       }
       await getCard();
@@ -351,12 +383,26 @@ function App() {
           </div>
         </form>
       </section> : player ? <>
-        <div className="player-line"><span>{player.name}</span>
+        <div className="player-line"><strong className="player-name">{player.name}</strong>
           <div className="player-stats">
-            <span>{yourRank === undefined ? 'Rank —' : yourRank === null ? 'Unranked' : <>Rank <strong>#{yourRank}</strong></>}</span>
-            <span><strong>{pointCount.toLocaleString()}</strong> {pointCount === 1 ? 'point' : 'points'}</span>
+            <span className="player-rank">{yourRank === undefined ? 'Rank —' : yourRank === null ? 'Unranked' : <>
+              {yourRank <= 3 && <Crown rank={yourRank} />} Rank <strong>#{yourRank}</strong>
+            </>}</span>
+            <span className="score">
+              <span className="score-value" key={rollingScore?.id} data-rolling={!!rollingScore}>
+                {rollingScore && <span className="score-previous" aria-hidden="true">
+                  {(rollingScore.total - rollingScore.earned).toLocaleString()}
+                </span>}
+                <strong>{pointCount.toLocaleString()}</strong>
+              </span>
+              {pointCount === 1 ? 'point' : 'points'}
+              {burst && <span className="score-add" aria-hidden="true">+{burst.earned.toLocaleString()}</span>}
+            </span>
             <span><strong>{answerCount.toLocaleString()}</strong> {answerCount === 1 ? 'answer' : 'answers'}</span>
           </div>
+          <button className="outline badge-button" type="button" onClick={() => setShowBadges(true)}>
+            Badges <span>{badgesEarned}/{badges.length}</span>
+          </button>
         </div>
         <h1 className="review-question">Do these columns represent the same kind of thing?</h1>
         <p className="hint">Read the dataset descriptions and examples. Vote <strong>Yes</strong> if both
@@ -406,6 +452,7 @@ function App() {
       </div>
     </Modal>}
     {leaderboard && <RankPanel {...standings} close={() => setLeaderboard(false)} />}
+    {showBadges && <BadgePanel badges={badges} close={() => setShowBadges(false)} />}
   </>;
 }
 

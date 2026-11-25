@@ -167,11 +167,17 @@ export async function game(db: Store, catalog: Query, sha: string, key: Buffer, 
       const top = entries.filter(entry => entry.position <= 50).map(({ name, rank, points }) =>
         ({ name, rank, points: Number(points) }));
       const rank = entries.find(entry => entry.player === player?.id);
+      const speedBadge = player && await first(db, `
+        SELECT 1 FROM (
+          SELECT answered_at - LAG(answered_at, 5) OVER (ORDER BY answered_at, receipt) AS elapsed
+          FROM review_points WHERE player = ?
+        ) AS windows WHERE elapsed <= 120000 LIMIT 1
+      `, player.id);
       return {
         asOf: new Date(now()).toISOString(),
         top,
         you: player ? { name: player.name, rank: rank?.rank ?? null, points: Number(rank?.points ?? 0),
-          livePoints: Number(rank?.points ?? 0), answers: rank?.answers ?? 0 } : null,
+          livePoints: Number(rank?.points ?? 0), answers: rank?.answers ?? 0, speedBadge: !!speedBadge } : null,
       };
     },
   };
